@@ -129,14 +129,16 @@ def serve(
     from glm_plan_watcher.daemon.app import create_app
     from glm_plan_watcher.daemon.security import (
         DaemonHandshake,
-        bind_server_socket,
+        bind_with_port_fallback,
         default_handshake_path,
         resolve_token,
         write_handshake,
     )
 
-    server_socket = bind_server_socket(host, port)
+    server_socket = bind_with_port_fallback(host, port)
     resolved_port = int(server_socket.getsockname()[1])
+    if port not in (0, resolved_port):
+        typer.echo(f"端口 {port} 被占用，已回退到 {resolved_port}（以握手文件为准）。")
     resolved_token = resolve_token(token)
     handshake_path = handshake or default_handshake_path()
     write_handshake(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tempfile
+import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,8 +33,16 @@ class Repository:
     and easy packaging as a Tauri sidecar dependency.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, profiles_dir: str | Path | None = None) -> None:
         self.path = Path(path)
+        # 账号 profile 目录由程序自动管理（用户无需手填路径）：普通 DB 放在 db 同级的 profiles/ 下；
+        # :memory: 不在 cwd 落地，改用临时目录，避免污染当前工作目录。
+        if profiles_dir is not None:
+            self.profiles_dir = Path(profiles_dir)
+        elif str(self.path) == ":memory:":
+            self.profiles_dir = Path(tempfile.mkdtemp(prefix="glm-watcher-profiles-"))
+        else:
+            self.profiles_dir = self.path.parent / "profiles"
         self._shared: sqlite3.Connection | None = None
         if str(self.path) == ":memory:":
             # in-memory DB 是“按连接”的：每次新建连接都会拿到一个空库。必须用一条常驻连接，
@@ -142,13 +152,31 @@ class Repository:
             if column not in existing:
                 conn.execute(f"ALTER TABLE targets ADD COLUMN {column} {ddl}")
 
+    def generate_profile_dir(self) -> str:
+        """为新账号生成一个唯一的、程序自管理的 profile 目录（不暴露给用户手填）。
+
+        用 exist_ok=False + 重试，确保是全新目录、绝不复用已有 profile（与 UNIQUE 语义一致）。
+        """
+        self.profiles_dir.mkdir(parents=True, exist_ok=True)
+        for _ in range(10):
+            path = self.profiles_dir / uuid.uuid4().hex
+            try:
+                path.mkdir(exist_ok=False)
+            except FileExistsError:
+                continue
+            return str(path)
+        raise RuntimeError("无法分配唯一的 profile 目录")
+
     def create_account(
         self,
         display_name: str,
-        user_data_dir: str,
+        user_data_dir: str | None = None,
         status: str = "stopped",
         last_login_at: str | None = None,
     ) -> dict[str, Any]:
+        # 留空时自动分配 profile 目录；用户也可显式传入以导入已有 profile（去除首尾空白）。
+        cleaned = (user_data_dir or "").strip()
+        user_data_dir = cleaned if cleaned else self.generate_profile_dir()
         with self.connect() as conn:
             cursor = conn.execute(
                 """

@@ -178,6 +178,25 @@ def test_daemon_auth_and_health_exemption(tmp_path: Path) -> None:
     assert client.get("/accounts", headers=AUTH_HEADERS).status_code == 200
 
 
+def test_create_account_without_path_auto_manages_profile(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    # 只填名字（不传 user_data_dir）→ 201 且自动分配 profiles/ 下目录。
+    response = client.post("/accounts", headers=AUTH_HEADERS, json={"display_name": "auto"})
+    assert response.status_code == 201
+    profile = Path(response.json()["user_data_dir"])
+    assert profile.parent == tmp_path / "profiles"
+    assert profile.is_dir()
+
+    # 传空白字符串也走自动分配。
+    blank = client.post(
+        "/accounts", headers=AUTH_HEADERS, json={"display_name": "blank", "user_data_dir": "   "}
+    )
+    assert blank.status_code == 201
+    assert Path(blank.json()["user_data_dir"]).parent == tmp_path / "profiles"
+
+
 def test_daemon_cors_headers_for_tauri_origin(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "daemon.sqlite3")
     client = TestClient(create_app(repository=repo, token=TOKEN))

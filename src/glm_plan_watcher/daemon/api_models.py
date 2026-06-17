@@ -11,7 +11,8 @@ from glm_plan_watcher.models import BillingCycle, Tier
 
 class AccountCreate(BaseModel):
     display_name: str = Field(min_length=1)
-    user_data_dir: str = Field(min_length=1)
+    # 留空 = daemon 自动管理 profile 目录；也可显式传入以导入已有 profile。
+    user_data_dir: str | None = None
 
 
 class AccountUpdate(BaseModel):

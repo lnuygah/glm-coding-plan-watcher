@@ -53,3 +53,35 @@ def test_repository_account_target_event_crud(tmp_path: Path) -> None:
     repo.update_worker_heartbeat(account["id"], "later")
     assert repo.get_worker(account["id"])["pid"] == 123
     assert repo.get_worker(account["id"])["last_heartbeat_at"] == "later"
+
+
+def test_create_account_auto_manages_profile_dir(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+
+    # 留空 user_data_dir → 自动分配 profiles/ 下的唯一目录并创建。
+    account = repo.create_account("auto")
+    profile = Path(account["user_data_dir"])
+    assert profile.parent == tmp_path / "profiles"
+    assert profile.is_dir()
+
+    # 两个账号各自分到不同的 profile 目录（UNIQUE）。
+    other = repo.create_account("auto2")
+    assert other["user_data_dir"] != account["user_data_dir"]
+
+    # 显式传入则尊重用户提供的路径（导入已有 profile），并去除首尾空白。
+    imported = repo.create_account("imported", f"  {tmp_path / 'user_data' / 'default'}  ")
+    assert imported["user_data_dir"] == str(tmp_path / "user_data" / "default")
+
+
+def test_memory_repository_auto_profile_not_in_cwd() -> None:
+    import tempfile
+
+    repo = Repository(":memory:")
+    account = repo.create_account("mem")
+    profile = Path(account["user_data_dir"])
+
+    assert profile.is_dir()
+    # :memory: 的 profiles 目录在临时目录，不污染当前工作目录。
+    assert profile.parent == repo.profiles_dir
+    assert str(repo.profiles_dir).startswith(tempfile.gettempdir())
+    assert repo.profiles_dir != Path.cwd() / "profiles"
