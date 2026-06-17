@@ -103,6 +103,25 @@ def debug_selectors(
     typer.echo(json.dumps(snapshot, ensure_ascii=False, indent=2))
 
 
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", help="监听地址；默认仅本机")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="监听端口")] = 8765,
+    db_path: Annotated[Path, typer.Option("--db", help="SQLite 数据库路径")] = Path(
+        "daemon.sqlite3"
+    ),
+) -> None:
+    """启动本地 FastAPI daemon。"""
+
+    if host != "127.0.0.1":
+        typer.echo("警告：daemon 默认应只绑定 127.0.0.1；请确认你确实需要暴露到其它地址。")
+    import uvicorn
+
+    from glm_plan_watcher.daemon.app import create_app
+
+    uvicorn.run(create_app(db_path=db_path), host=host, port=port)
+
+
 async def _login(config: AppConfig) -> None:
     async with BrowserSession(config, make_storage(config)) as session:
         await session.goto(config.url)

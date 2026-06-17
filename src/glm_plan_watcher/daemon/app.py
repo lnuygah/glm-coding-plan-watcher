@@ -1,0 +1,152 @@
+"""FastAPI application for the local daemon."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+
+from glm_plan_watcher.daemon.api_models import (
+    AccountCreate,
+    AccountUpdate,
+    TargetCreate,
+    TargetUpdate,
+)
+from glm_plan_watcher.daemon.ingest import EventBroadcaster
+from glm_plan_watcher.daemon.supervisor import WorkerAlreadyRunningError, WorkerSupervisor
+from glm_plan_watcher.db import Repository
+
+
+def create_app(
+    db_path: str | Path = Path("daemon.sqlite3"),
+    repository: Repository | None = None,
+    broadcaster: EventBroadcaster | None = None,
+    supervisor: WorkerSupervisor | None = None,
+) -> FastAPI:
+    repo = repository or Repository(db_path)
+    events = broadcaster or EventBroadcaster()
+    workers = supervisor or WorkerSupervisor(repo, events)
+
+    app = FastAPI(title="GLM Plan Watcher Daemon")
+    app.state.repository = repo
+    app.state.broadcaster = events
+    app.state.supervisor = workers
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/accounts")
+    def list_accounts() -> list[dict[str, Any]]:
+        return repo.list_accounts()
+
+    @app.post("/accounts", status_code=status.HTTP_201_CREATED)
+    def create_account(payload: AccountCreate) -> dict[str, Any]:
+        try:
+            return repo.create_account(payload.display_name, payload.user_data_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/accounts/{account_id}")
+    def get_account(account_id: int) -> dict[str, Any]:
+        try:
+            return repo.get_account(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/accounts/{account_id}")
+    def update_account(account_id: int, payload: AccountUpdate) -> dict[str, Any]:
+        try:
+            return repo.update_account(account_id, **payload.model_dump(exclude_unset=True))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_account(account_id: int) -> None:
+        repo.delete_account(account_id)
+
+    @app.get("/accounts/{account_id}/targets")
+    def list_targets(account_id: int) -> list[dict[str, Any]]:
+        return repo.list_targets(account_id=account_id)
+
+    @app.post("/accounts/{account_id}/targets", status_code=status.HTTP_201_CREATED)
+    def create_target(account_id: int, payload: TargetCreate) -> dict[str, Any]:
+        try:
+            return repo.create_target(
+                account_id=account_id,
+                billing_cycle=payload.billing_cycle.value,
+                tier=payload.tier.value,
+                enabled=payload.enabled,
+                interval=payload.interval,
+                jitter=payload.jitter,
+                dry_run=payload.dry_run,
+                auto_click_entry=payload.auto_click_entry,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/targets/{target_id}")
+    def update_target(target_id: int, payload: TargetUpdate) -> dict[str, Any]:
+        data = payload.model_dump(exclude_unset=True)
+        if "billing_cycle" in data:
+            data["billing_cycle"] = data["billing_cycle"].value
+        if "tier" in data:
+            data["tier"] = data["tier"].value
+        try:
+            return repo.update_target(target_id, **data)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/targets/{target_id}")
+    def get_target(target_id: int) -> dict[str, Any]:
+        try:
+            return repo.get_target(target_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/targets/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_target(target_id: int) -> None:
+        repo.delete_target(target_id)
+
+    @app.get("/events")
+    def list_events(
+        account_id: int | None = None,
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+    ) -> list[dict[str, Any]]:
+        return repo.list_events(account_id=account_id, limit=limit, offset=offset)
+
+    @app.get("/workers")
+    def list_workers() -> list[dict[str, object]]:
+        return workers.list_workers()
+
+    @app.get("/workers/{account_id}")
+    def get_worker(account_id: int) -> dict[str, object]:
+        return workers.worker_status(account_id)
+
+    @app.post("/accounts/{account_id}/worker/start")
+    async def start_worker(account_id: int) -> dict[str, object]:
+        try:
+            return await workers.start_worker(account_id)
+        except WorkerAlreadyRunningError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/accounts/{account_id}/worker/stop")
+    async def stop_worker(account_id: int) -> dict[str, object]:
+        return await workers.stop_worker(account_id)
+
+    @app.websocket("/ws/events")
+    async def websocket_events(websocket: WebSocket, account_id: int | None = None) -> None:
+        await websocket.accept()
+        try:
+            async with events.subscribe(account_id=account_id) as queue:
+                while True:
+                    payload = await queue.get()
+                    await websocket.send_json(payload)
+        except WebSocketDisconnect:
+            return
+
+    return app
