@@ -34,6 +34,9 @@ server = [
     "uvicorn>=0.30",
     "websockets>=12.0",
 ]
+packaging = [
+    "pyinstaller>=6.0",
+]
 # 可选：桌面通知（缺失时 notifier 自动降级，不影响运行）
 desktop = ["plyer>=2.1"]
 
