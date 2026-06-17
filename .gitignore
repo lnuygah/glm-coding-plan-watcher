@@ -44,12 +44,12 @@ handshake.json
 
 # Tauri / frontend / sidecar build outputs
 node_modules/
+!package-lock.json
 src-tauri/target/
 src-tauri/gen/
 ui-dist/
 sidecar/build/
 sidecar/dist/
-package-lock.json
 # 只追踪那个 37 字节 dev 占位 shim；PyInstaller 产出的真实(大)二进制一律不入库
 sidecar/bin/*
 !sidecar/bin/glm-plan-daemon-aarch64-apple-darwin
