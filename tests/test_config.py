@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from glm_plan_watcher.config import dump_default_yaml, load_config
-from glm_plan_watcher.models import BillingCycle, Tier
+from glm_plan_watcher.models import BillingCycle, TargetSpec, Tier
 
 
 def test_load_config_yaml(tmp_path: Path) -> None:
@@ -29,6 +29,32 @@ notify:
     assert config.refresh_interval_seconds == 10
     assert config.notify.console is False
     assert config.notify.webhook_url == "https://example.test/hook"
+    assert config.target_specs == [
+        TargetSpec(billing_cycle=BillingCycle.yearly, tier=Tier.Max),
+    ]
+
+
+def test_load_config_targets_list(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        """
+billing_cycle: yearly
+tier: Max
+targets:
+  - billing_cycle: monthly
+    tier: Lite
+  - billing_cycle: quarterly
+    tier: Pro
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.target_specs == [
+        TargetSpec(billing_cycle=BillingCycle.monthly, tier=Tier.Lite),
+        TargetSpec(billing_cycle=BillingCycle.quarterly, tier=Tier.Pro),
+    ]
 
 
 def test_env_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

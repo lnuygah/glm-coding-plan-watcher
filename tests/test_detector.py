@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from playwright.async_api import Page
 
-from glm_plan_watcher.detector import DomDetector, classify_button
+from glm_plan_watcher.detector import DomDetector, classify_button, looks_like_auth_required
 from glm_plan_watcher.models import BillingCycle, ButtonState, TargetSpec, Tier
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -32,6 +32,18 @@ def test_classify_button(text: str, attrs: dict[str, str], expected: ButtonState
     assert classify_button(text, attrs).state is expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("请登录后继续", True),
+        ("登录 / 注册", True),
+        ("套餐卡片正常展示", False),
+    ],
+)
+def test_looks_like_auth_required(text: str, expected: bool) -> None:
+    assert looks_like_auth_required(text) is expected
+
+
 @pytest.mark.browser
 async def test_dom_detector_available(page) -> None:
     await load_fixture(page, "available.html")
@@ -54,6 +66,22 @@ async def test_dom_detector_sold_out_real_button_markup(page) -> None:
     assert "暂时售罄" in result.button_text
     assert result.attrs["disabled"] == "disabled"
     assert "is-disabled" in result.attrs["class"]
+
+
+@pytest.mark.browser
+async def test_dom_detector_auth_required_when_cards_missing(page) -> None:
+    await load_fixture(page, "auth_required.html")
+    detector = DomDetector()
+
+    async def no_wait(_page: Page, timeout_ms: int = 15_000) -> None:
+        return None
+
+    detector.wait_for_content = no_wait  # type: ignore[method-assign]
+    result = await detector.detect(page, TargetSpec(billing_cycle=BillingCycle.monthly, tier=Tier.Pro))
+
+    assert result.state is ButtonState.auth_required
+    assert result.available is False
+    assert "login-required" in result.reason
 
 
 @pytest.mark.browser

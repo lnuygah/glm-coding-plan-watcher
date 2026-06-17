@@ -12,8 +12,8 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from glm_plan_watcher.models import ButtonState, CheckResult, TargetSpec
 from glm_plan_watcher.selectors import (
-    AVAILABLE_KEYWORDS,
     AUTH_REQUIRED_KEYWORDS,
+    AVAILABLE_KEYWORDS,
     BILLING_CYCLE_LABELS,
     CSS_BUY_BUTTON,
     CSS_FALLBACK_BUTTON,
