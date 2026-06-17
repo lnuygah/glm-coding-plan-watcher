@@ -115,5 +115,27 @@ async def test_account_watcher_uses_scheduler_policy_for_delay() -> None:
     assert events[1]["type"] == "heartbeat"
 
 
+@pytest.mark.asyncio
+async def test_account_watcher_honors_target_level_dry_run_on_hit() -> None:
+    target = TargetSpec(
+        billing_cycle=BillingCycle.monthly,
+        tier=Tier.Pro,
+        dry_run=True,
+    )
+    output = StringIO()
+    config = AppConfig(targets=[target])
+
+    code = await AccountWatcher(
+        config,
+        detector=FakeDetector(state=ButtonState.available),
+        stdout=output,
+    ).monitor(page=object(), session=None)
+
+    events = _json_lines(output)
+    assert code == 0
+    assert events[0]["type"] == "hit"
+    assert events[0]["action"] == "dry_run"
+
+
 def _json_lines(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]

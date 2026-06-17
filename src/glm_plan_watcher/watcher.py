@@ -50,6 +50,12 @@ class AccountWatcher:
         self.scheduler_policy = scheduler_policy or SchedulerPolicy(
             base_interval_seconds=config.refresh_interval_seconds,
             jitter_seconds=config.refresh_jitter_seconds,
+            active_window_start=config.active_window_start,
+            active_window_end=config.active_window_end,
+            active_timezone=config.active_timezone,
+            active_interval_seconds=config.active_interval_seconds,
+            active_jitter_seconds=config.active_jitter_seconds,
+            idle_interval_seconds=config.idle_interval_seconds,
         )
         self._stop = asyncio.Event()
         self._last_state: dict[str, str] = {}
@@ -161,14 +167,16 @@ class AccountWatcher:
             artifacts = NotificationArtifacts(screenshot=screenshot, html=html)
             await self.notifier.notify_available(result, artifacts)
 
-        if self.config.dry_run or session is None:
-            action = "dry_run" if self.config.dry_run else "none"
+        target_dry_run = self.config.dry_run or result.target.dry_run
+        if target_dry_run or session is None:
+            action = "dry_run" if target_dry_run else "none"
             self._emit_event(result, check_index, event_type="hit", action=action)
-            if self.config.dry_run:
+            if target_dry_run:
                 self.logger.warning("dry-run 命中：只检测不点击")
             return
 
-        if self.config.auto_click_entry and isinstance(self.detector, DomDetector):
+        target_auto_click_entry = self.config.auto_click_entry and result.target.auto_click_entry
+        if target_auto_click_entry and isinstance(self.detector, DomDetector):
             clicked = await self.detector.click_entry_button(page, result.target)
             action = "clicked_entry" if clicked else "none"
             message = "entry clicked; waiting for manual payment" if clicked else "entry button not clicked"
