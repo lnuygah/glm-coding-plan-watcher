@@ -1,6 +1,6 @@
 """配置：YAML + 环境变量（pydantic-settings）。
 
-一个 config = 一个目标 = 一个进程。多任务/多账号靠多份 config（各自 user_data_dir）实现。
+一个 config = 一个账号 = 一个浏览器会话；可选 targets 列表支持该账号下多个目标顺序轮询。
 
 加载优先级（高 → 低）：环境变量(GLM_WATCHER__*) > YAML 文件 > 默认值。
 敏感项（如 webhook_url）建议走环境变量，不要写进 YAML。
@@ -47,6 +47,7 @@ class AppConfig(BaseSettings):
     url: str = DEFAULT_URL
     billing_cycle: BillingCycle = BillingCycle.monthly
     tier: Tier = Tier.Pro
+    targets: list[TargetSpec] = Field(default_factory=list)
 
     # —— 循环节奏（不激进 + jitter）——
     refresh_interval_seconds: float = 90.0
@@ -88,6 +89,11 @@ class AppConfig(BaseSettings):
     @property
     def target(self) -> TargetSpec:
         return TargetSpec(billing_cycle=self.billing_cycle, tier=self.tier)
+
+    @property
+    def target_specs(self) -> list[TargetSpec]:
+        """账号级目标列表；未配置 targets 时保持旧版单目标行为。"""
+        return self.targets or [self.target]
 
     def ensure_dirs(self) -> None:
         """创建运行所需的产物目录与登录态目录。"""
@@ -139,19 +145,27 @@ def dump_default_yaml() -> str:
 
 
 _DEFAULT_YAML = """\
-# GLM Coding Plan Watcher 配置（一个 config = 一个目标 = 一个进程）
+# GLM Coding Plan Watcher 配置（一个 config = 一个账号 = 一个浏览器会话）
 # 敏感项（webhook 等）建议放到 .env，用 GLM_WATCHER__NOTIFY__WEBHOOK_URL 覆盖。
 
 url: "https://www.bigmodel.cn/glm-coding"
 
 # 目标：billing_cycle = monthly | quarterly | yearly ; tier = Lite | Pro | Max
+# 兼容旧版单目标配置：未设置 targets 时使用下方顶层 billing_cycle/tier。
 billing_cycle: monthly
 tier: Pro
 
-# 循环节奏（秒）。实际等待 = interval ± random(0, jitter)，不激进。
+# 可选：账号级多目标顺序轮询。配置后会忽略顶层 billing_cycle/tier。
+# targets:
+#   - billing_cycle: monthly
+#     tier: Pro
+#   - billing_cycle: yearly
+#     tier: Max
+
+# 循环节奏（秒）。多目标会顺序检测一轮后统一等待 interval ± random(0, jitter)，不激进。
 refresh_interval_seconds: 90
 refresh_jitter_seconds: 30
-max_checks: 0            # 0 = 无限循环
+max_checks: 0            # 0 = 无限循环；多目标时表示账号级扫描轮数
 
 # 浏览器
 headless: false          # 首次登录请用 false（可视化）；watch 可设 true

@@ -47,6 +47,7 @@ class ButtonState(StrEnum):
     sold_out = "sold_out"  # 售罄/补货
     disabled = "disabled"  # disabled / aria-disabled / class disabled
     unavailable = "unavailable"  # 其它不可用文案（已订阅/敬请期待等）
+    auth_required = "auth_required"  # 未登录 / 登录墙，需要用户重新登录
     not_found = "not_found"  # 未定位到按钮
 
     @property
@@ -86,7 +87,7 @@ class WatchEvent(BaseModel):
     字段保持稳定，作为父子进程之间的契约。
     """
 
-    type: str = "check"  # check | hit | error | shutdown
+    type: str = "check"  # check | hit | error | heartbeat | shutdown
     check_index: int
     target: str  # TargetSpec.describe()
     button_state: str

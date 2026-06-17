@@ -13,6 +13,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from glm_plan_watcher.models import ButtonState, CheckResult, TargetSpec
 from glm_plan_watcher.selectors import (
     AVAILABLE_KEYWORDS,
+    AUTH_REQUIRED_KEYWORDS,
     BILLING_CYCLE_LABELS,
     CSS_BUY_BUTTON,
     CSS_FALLBACK_BUTTON,
@@ -85,11 +86,28 @@ def classify_button(text: str, attrs: Mapping[str, str]) -> ButtonClassification
     return ButtonClassification(ButtonState.unavailable, "button text did not match known keywords")
 
 
+def looks_like_auth_required(text: str) -> bool:
+    """登录墙启发式，不依赖浏览器。
+
+    仅在 DOM 检测确认套餐卡片缺失时使用，避免把页面 header 中的普通「登录」入口误判为
+    登录过期。后续可用 `debug-selectors` 校准真实登录墙 DOM。
+    """
+
+    normalized_text = " ".join(text.split())
+    return _contains_any(normalized_text, AUTH_REQUIRED_KEYWORDS)
+
+
 class DomDetector(DetectorStrategy):
     """基于真实 DOM 的三段定位检测。"""
 
     async def detect(self, page: Page, target: TargetSpec) -> CheckResult:
         await self.wait_for_content(page)
+        if await self.is_auth_required(page):
+            return CheckResult(
+                target=target,
+                state=ButtonState.auth_required,
+                reason="package cards are missing and page shows login-required text",
+            )
         await self.ensure_billing_cycle(page, target)
         card = await self.find_tier_card(page, target)
         if card is None:
@@ -130,6 +148,22 @@ class DomDetector(DetectorStrategy):
             await page.locator(CSS_PACKAGE_CARD_BOX).first.wait_for(
                 state="visible", timeout=timeout_ms
             )
+
+    async def is_auth_required(self, page: Page) -> bool:
+        """识别需要重新登录的页面。
+
+        GLM 页面未登录时也可能展示套餐卡片，因此这里必须先确认套餐卡片不可见，再结合
+        登录墙文案判断。该启发式只用于给 GUI/父进程提示重新登录，不做任何自动登录。
+        """
+
+        card = page.locator(CSS_PACKAGE_CARD_BOX).first
+        if await card.count() > 0:
+            with suppress(PlaywrightTimeoutError):
+                if await card.is_visible(timeout=500):
+                    return False
+
+        text = await _safe_inner_text(page.locator("body"))
+        return looks_like_auth_required(text)
 
     async def ensure_billing_cycle(self, page: Page, target: TargetSpec) -> None:
         """切到目标计费周期；fixture 或页面缺 tab 时保持当前页面。"""

@@ -1,16 +1,24 @@
-# GLM Coding Plan Watcher 配置（一个 config = 一个目标 = 一个进程）
+# GLM Coding Plan Watcher 配置（一个 config = 一个账号 = 一个浏览器会话）
 # 敏感项（webhook 等）建议放到 .env，用 GLM_WATCHER__NOTIFY__WEBHOOK_URL 覆盖。
 
 url: "https://www.bigmodel.cn/glm-coding"
 
 # 目标：billing_cycle = monthly | quarterly | yearly ; tier = Lite | Pro | Max
+# 兼容旧版单目标配置：未设置 targets 时使用下方顶层 billing_cycle/tier。
 billing_cycle: monthly
 tier: Pro
 
-# 循环节奏（秒）。实际等待 = interval ± random(0, jitter)，不激进。
+# 可选：账号级多目标顺序轮询。配置后会忽略顶层 billing_cycle/tier。
+# targets:
+#   - billing_cycle: monthly
+#     tier: Pro
+#   - billing_cycle: yearly
+#     tier: Max
+
+# 循环节奏（秒）。多目标会顺序检测一轮后统一等待 interval ± random(0, jitter)，不激进。
 refresh_interval_seconds: 90
 refresh_jitter_seconds: 30
-max_checks: 0            # 0 = 无限循环
+max_checks: 0            # 0 = 无限循环；多目标时表示账号级扫描轮数
 
 # 浏览器
 headless: false          # 首次登录请用 false（可视化）；watch 可设 true

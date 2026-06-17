@@ -45,6 +45,15 @@ AVAILABLE_KEYWORDS = (
     "开通",
 )
 
+AUTH_REQUIRED_KEYWORDS = (
+    "请登录",
+    "登录后",
+    "登录/注册",
+    "登录 / 注册",
+    "立即登录",
+    "去登录",
+)
+
 DISABLED_CLASS_TOKENS = (
     "disabled",
     "is-disabled",
