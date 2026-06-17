@@ -95,6 +95,28 @@ class SchedulerPolicy:
         jittered = base + self._jitter()
         return max(self.min_interval_seconds, jittered)
 
+    def in_active_window(
+        self,
+        *,
+        start_text: str,
+        end_text: str,
+        timezone_name: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Pure predicate: is ``now`` inside the configured sale window?
+
+        Returns ``False`` when start/end are unset or unparseable, so callers can treat an
+        absent window as "never in window". This lets the worker detect window boundaries with
+        the exact same timezone-aware, cross-midnight logic the cadence uses.
+        """
+
+        start = _parse_hhmm(start_text)
+        end = _parse_hhmm(end_text)
+        if start is None or end is None:
+            return False
+        local_now = _localize_now(now or self.now_fn(), timezone_name)
+        return _in_window(local_now.time(), start, end)
+
     def _base_delay_from_restock_hints(self, results: Sequence[CheckResult]) -> float | None:
         now = self.now_fn()
         hints = [

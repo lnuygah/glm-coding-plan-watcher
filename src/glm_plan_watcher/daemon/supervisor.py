@@ -92,8 +92,20 @@ class WorkerSupervisor:
         self._headful_handles: dict[int, HeadfulHandle] = {}
         self._restart_counts: dict[int, int] = {}
         self._auto_handoff_tasks: set[asyncio.Task[None]] = set()
+        # worker spawn 在后台进行：_starting 占位互斥，_spawn_tasks 持有任务引用避免被 GC。
+        self._starting: set[int] = set()
+        self._spawn_tasks: set[asyncio.Task[None]] = set()
 
     async def start_worker(self, account_id: int) -> dict[str, object]:
+        """请求启动账号 worker，并尽快返回。
+
+        关键修复：进程 spawn（asyncio.create_subprocess_exec）在打包 sidecar/冷启动解释器下可能
+        耗时数秒；若把整个 HTTP 响应阻塞到 spawn 完成，WebKit webview 会中止 fetch（GUI 报
+        “启动 失败: Load failed”）。因此这里只做廉价的互斥校验与配置物化（可同步 400），把
+        worker 标记为 "starting" 后立即返回，真正的 spawn + 管线接线放到后台任务里完成；就绪状态
+        通过 worker status 的 heartbeat（→ running）和事件流对外暴露。
+        """
+
         headful = self._headful_handles.get(account_id)
         if headful is not None and headful.process.returncode is None:
             raise ProfileInUseError(f"account profile is in visible {headful.kind} session")
@@ -101,10 +113,54 @@ class WorkerSupervisor:
         existing = self._handles.get(account_id)
         if existing is not None and existing.process.returncode is None and existing.desired_running:
             raise WorkerAlreadyRunningError(f"worker already running for account {account_id}")
+        if account_id in self._starting:
+            raise WorkerAlreadyRunningError(f"worker already starting for account {account_id}")
 
+        # materialize_config 是同步的，且会在缺少 enabled targets 时抛 ValueError——保持同步抛出，
+        # 让路由把它映射成 400，而不是吞进后台任务。
         config_path = self.materialize_config(account_id)
+
+        # 立刻把 worker 标记为 starting，并占位互斥，避免后台 spawn 期间重复启动或被 headful 抢占。
+        self._starting.add(account_id)
+        self.repository.upsert_worker(
+            account_id,
+            pid=None,
+            status="starting",
+            started_at=datetime.now(UTC).isoformat(),
+            last_heartbeat_at=None,
+        )
+        self.repository.update_account(account_id, status="starting")
+
+        task = asyncio.create_task(self._spawn_worker_process(account_id, config_path))
+        self._spawn_tasks.add(task)
+        task.add_done_callback(self._spawn_tasks.discard)
+        return self.worker_status(account_id)
+
+    async def _spawn_worker_process(self, account_id: int, config_path: Path) -> None:
+        """后台执行真正的进程 spawn 与管线接线（ingest/monitor）。"""
+
         command = [sys.executable, "-m", "glm_plan_watcher.worker", "--config", str(config_path)]
-        process = await self.process_factory(command)
+        try:
+            process = await self.process_factory(command)
+        except Exception as exc:
+            self._starting.discard(account_id)
+            self.repository.update_worker_status(account_id, status="crashed", pid=None)
+            self.repository.update_account(account_id, status="crashed")
+            await self._record_daemon_event(
+                account_id,
+                event_type="worker",
+                action="failed",
+                target="account",
+                message=f"worker spawn failed: {exc}",
+            )
+            return
+
+        # spawn 期间若被 stop_worker 取消（占位已被移除），不接管这个进程，直接终止收场。
+        if account_id not in self._starting:
+            with suppress(Exception):
+                process.terminate()
+            return
+
         handle = WorkerHandle(
             account_id=account_id,
             process=process,
@@ -112,13 +168,13 @@ class WorkerSupervisor:
             restart_count=self._restart_counts.get(account_id, 0),
         )
         self._handles[account_id] = handle
+        self._starting.discard(account_id)
 
-        started_at = datetime.now(UTC).isoformat()
         self.repository.upsert_worker(
             account_id,
             pid=process.pid,
             status="running",
-            started_at=started_at,
+            started_at=datetime.now(UTC).isoformat(),
             last_heartbeat_at=None,
         )
         self.repository.update_account(account_id, status="running")
@@ -134,7 +190,6 @@ class WorkerSupervisor:
                 )
             )
         handle.monitor_task = asyncio.create_task(self._monitor_process(handle))
-        return self.worker_status(account_id)
 
     async def start_login_session(
         self,
@@ -165,6 +220,9 @@ class WorkerSupervisor:
         )
 
     async def stop_worker(self, account_id: int) -> dict[str, object]:
+        # 若 spawn 还在后台进行，清除占位：_spawn_worker_process 完成后发现自己已被取消，会终止刚
+        # spawn 出来的进程而不接管，避免 stop 之后又冒出一个 worker。
+        self._starting.discard(account_id)
         handle = self._handles.get(account_id)
         if handle is not None:
             handle.desired_running = False
@@ -217,6 +275,7 @@ class WorkerSupervisor:
                     "idle_interval_seconds": target["idle_interval_seconds"],
                     "dry_run": target["dry_run"],
                     "auto_click_entry": target["auto_click_entry"],
+                    "visible_in_window": target["visible_in_window"],
                 }
                 for target in targets
             ],

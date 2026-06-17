@@ -53,6 +53,17 @@ class FakeProcessFactory:
         return process
 
 
+async def _wait_for_spawn(supervisor: WorkerSupervisor) -> None:
+    """start_worker 现在把进程 spawn 放到后台任务里；测试需等这些任务跑完再断言。"""
+
+    for _ in range(10):
+        tasks = [task for task in supervisor._spawn_tasks if not task.done()]  # noqa: SLF001
+        if not tasks:
+            return
+        await asyncio.gather(*tasks)
+    return
+
+
 def seed_account(repo: Repository, tmp_path: Path, interval: float = 1, jitter: float = 0) -> int:
     account = repo.create_account("main", str(tmp_path / "profile"))
     repo.create_target(
@@ -110,9 +121,12 @@ async def test_supervisor_restarts_crashed_worker_with_backoff(
     monkeypatch.setattr(supervisor, "compute_backoff", lambda _count: 0)
 
     await supervisor.start_worker(account_id)
+    await _wait_for_spawn(supervisor)
     factory.processes[0].finish(1)
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    # 让 _monitor_process 跑完 backoff 并触发重启的后台 spawn。
+    for _ in range(5):
+        await asyncio.sleep(0)
+    await _wait_for_spawn(supervisor)
 
     assert len(factory.processes) == 2
     assert repo.get_worker(account_id)["status"] == "running"
@@ -143,6 +157,7 @@ async def test_login_stops_headless_worker_before_headful_session(tmp_path: Path
     )
 
     await supervisor.start_worker(account_id)
+    await _wait_for_spawn(supervisor)
     async with broadcaster.subscribe(account_id=account_id) as queue:
         result = await supervisor.start_login_session(account_id)
         message = await queue.get()
@@ -171,6 +186,7 @@ async def test_handoff_stops_worker_and_does_not_click_by_default(tmp_path: Path
     )
 
     await supervisor.start_worker(account_id)
+    await _wait_for_spawn(supervisor)
     result = await supervisor.start_handoff_session(account_id)
 
     assert headless_factory.processes[0].returncode == 0
@@ -212,6 +228,7 @@ async def test_auto_handoff_stops_headless_worker_after_available_hit(tmp_path: 
     )
 
     await supervisor.start_worker(account_id)
+    await _wait_for_spawn(supervisor)
     await supervisor._handle_worker_event(  # noqa: SLF001 - targeted supervisor behavior test
         account_id,
         WatchEvent(
@@ -255,6 +272,7 @@ async def test_auto_handoff_skips_dry_run_target(tmp_path: Path) -> None:
     )
 
     await supervisor.start_worker(account_id)
+    await _wait_for_spawn(supervisor)
     await supervisor._handle_worker_event(  # noqa: SLF001 - targeted supervisor behavior test
         account_id,
         WatchEvent(

@@ -178,6 +178,45 @@ def test_daemon_auth_and_health_exemption(tmp_path: Path) -> None:
     assert client.get("/accounts", headers=AUTH_HEADERS).status_code == 200
 
 
+def test_target_visible_in_window_field_create_default_and_patch(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    account = client.post(
+        "/accounts", headers=AUTH_HEADERS, json={"display_name": "main"}
+    ).json()
+
+    # 未传 visible_in_window → 默认 False，且出现在创建响应里。
+    created = client.post(
+        f"/accounts/{account['id']}/targets",
+        headers=AUTH_HEADERS,
+        json={"billing_cycle": "monthly", "tier": "Pro"},
+    ).json()
+    assert created["visible_in_window"] is False
+
+    # 创建时显式置 True。
+    created_true = client.post(
+        f"/accounts/{account['id']}/targets",
+        headers=AUTH_HEADERS,
+        json={"billing_cycle": "yearly", "tier": "Max", "visible_in_window": True},
+    ).json()
+    assert created_true["visible_in_window"] is True
+
+    # PATCH 切换并出现在 GET /targets 响应里。
+    patched = client.patch(
+        f"/targets/{created['id']}",
+        headers=AUTH_HEADERS,
+        json={"visible_in_window": True},
+    ).json()
+    assert patched["visible_in_window"] is True
+    assert (
+        client.get(f"/targets/{created['id']}", headers=AUTH_HEADERS).json()["visible_in_window"]
+        is True
+    )
+    listed = client.get(f"/accounts/{account['id']}/targets", headers=AUTH_HEADERS).json()
+    assert all("visible_in_window" in row for row in listed)
+
+
 def test_create_account_without_path_auto_manages_profile(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "daemon.sqlite3")
     client = TestClient(create_app(repository=repo, token=TOKEN))

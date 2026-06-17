@@ -69,6 +69,9 @@ class TargetSpec(BaseModel):
     idle_interval_seconds: float = Field(default=600.0, ge=0)
     dry_run: bool = False
     auto_click_entry: bool = True
+    # 开售时段内是否常驻可见浏览器：时段内切换到可见持久化上下文快刷，命中后就地点击入口一次；
+    # 时段外仍按 headless 仅检测。仅在配置了 active_window_start/end 时生效。
+    visible_in_window: bool = False
 
     def describe(self) -> str:
         return f"{self.billing_cycle.cn_label} / {self.tier.value}"

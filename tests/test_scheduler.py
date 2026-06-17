@@ -190,6 +190,50 @@ def test_scheduler_active_window_uses_explicit_timezone() -> None:
     assert policy.next_delay([]) == 3
 
 
+def test_scheduler_in_active_window_predicate() -> None:
+    inside = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    outside = datetime(2026, 6, 17, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    policy = SchedulerPolicy(base_interval_seconds=120, jitter_seconds=0)
+
+    assert (
+        policy.in_active_window(
+            start_text="10:00",
+            end_text="10:30",
+            timezone_name="Asia/Shanghai",
+            now=inside,
+        )
+        is True
+    )
+    assert (
+        policy.in_active_window(
+            start_text="10:00",
+            end_text="10:30",
+            timezone_name="Asia/Shanghai",
+            now=outside,
+        )
+        is False
+    )
+    # 未配置/无法解析的时段视为「永不在窗口内」。
+    assert (
+        policy.in_active_window(start_text="", end_text="", timezone_name="", now=inside) is False
+    )
+
+
+def test_scheduler_in_active_window_cross_midnight() -> None:
+    policy = SchedulerPolicy(base_interval_seconds=120, jitter_seconds=0)
+    now = datetime(2026, 6, 18, 0, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    assert (
+        policy.in_active_window(
+            start_text="23:00",
+            end_text="01:00",
+            timezone_name="Asia/Shanghai",
+            now=now,
+        )
+        is True
+    )
+
+
 def test_scheduler_uses_target_specific_active_window() -> None:
     now = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
     target = TargetSpec(

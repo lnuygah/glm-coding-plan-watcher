@@ -23,6 +23,7 @@ _TARGET_COLUMN_ADDITIONS = {
     "active_jitter_seconds": "REAL NOT NULL DEFAULT 1",
     "idle_interval_seconds": "REAL NOT NULL DEFAULT 600",
     "on_hit_handoff": "INTEGER NOT NULL DEFAULT 1",
+    "visible_in_window": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -104,7 +105,8 @@ class Repository:
                     active_interval_seconds REAL NOT NULL DEFAULT 3,
                     active_jitter_seconds REAL NOT NULL DEFAULT 1,
                     idle_interval_seconds REAL NOT NULL DEFAULT 600,
-                    on_hit_handoff INTEGER NOT NULL DEFAULT 1
+                    on_hit_handoff INTEGER NOT NULL DEFAULT 1,
+                    visible_in_window INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -245,6 +247,7 @@ class Repository:
         active_jitter_seconds: float = 1.0,
         idle_interval_seconds: float = 600.0,
         on_hit_handoff: bool = True,
+        visible_in_window: bool = False,
     ) -> dict[str, Any]:
         with self.connect() as conn:
             cursor = conn.execute(
@@ -253,9 +256,9 @@ class Repository:
                     account_id, billing_cycle, tier, enabled, interval, jitter, dry_run,
                     auto_click_entry, active_window_start, active_window_end, active_timezone,
                     active_interval_seconds, active_jitter_seconds, idle_interval_seconds,
-                    on_hit_handoff
+                    on_hit_handoff, visible_in_window
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     account_id,
@@ -273,6 +276,7 @@ class Repository:
                     active_jitter_seconds,
                     idle_interval_seconds,
                     int(on_hit_handoff),
+                    int(visible_in_window),
                 ),
             )
             return self.get_target(cursor.lastrowid, conn=conn)
@@ -325,6 +329,7 @@ class Repository:
             "active_jitter_seconds",
             "idle_interval_seconds",
             "on_hit_handoff",
+            "visible_in_window",
         }
         updates = {key: _sqlite_bool(value) for key, value in fields.items() if key in allowed}
         if updates:
@@ -509,7 +514,14 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def _normalize_bool_fields(row: sqlite3.Row) -> dict[str, Any]:
     data = _row_dict(row)
-    for key in ("enabled", "dry_run", "auto_click_entry", "on_hit_handoff", "available"):
+    for key in (
+        "enabled",
+        "dry_run",
+        "auto_click_entry",
+        "on_hit_handoff",
+        "visible_in_window",
+        "available",
+    ):
         if key in data:
             data[key] = bool(data[key])
     return data

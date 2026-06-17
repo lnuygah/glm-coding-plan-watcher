@@ -76,6 +76,8 @@ class AppConfig(BaseSettings):
     # 默认点击「购买/订阅入口」后暂停等待人工；仅点入口，绝不自动完成支付/确认/验证码/风控。
     auto_click_entry: bool = True
     dry_run: bool = False  # True 时只检测不点击
+    # 开售时段内是否常驻可见浏览器（详见 TargetSpec.visible_in_window）。
+    visible_in_window: bool = False
 
     # —— 通知 ——
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
@@ -113,6 +115,7 @@ class AppConfig(BaseSettings):
             idle_interval_seconds=self.idle_interval_seconds,
             dry_run=self.dry_run,
             auto_click_entry=self.auto_click_entry,
+            visible_in_window=self.visible_in_window,
         )
 
     @property
@@ -216,8 +219,11 @@ log_dir: "logs"
 # 命中后行为
 # auto_click_entry: 命中可购买时是否自动点击「购买/订阅入口」按钮（仅点入口，随后暂停等人工）。
 # dry_run: true 时只检测不点击。最终支付必须人工确认。
+# visible_in_window: true 时，开售时段内常驻可见浏览器快刷、命中后就地点击入口一次；时段外仍 headless 仅检测。
+#                     需配合 active_window_start/end 使用；dry_run 下永不点击。
 auto_click_entry: true
 dry_run: false
+visible_in_window: false
 
 notify:
   console: true

@@ -42,11 +42,15 @@ def test_repository_account_target_event_crud(tmp_path: Path) -> None:
     assert artifact["event_id"] == event_id
     assert artifact["screenshot_path"] == "screenshots/hit.png"
 
-    updated = repo.update_target(target["id"], enabled=False, dry_run=True)
+    # visible_in_window 默认 False，可创建/更新往返。
+    assert target["visible_in_window"] is False
+    updated = repo.update_target(target["id"], enabled=False, dry_run=True, visible_in_window=True)
     assert updated["enabled"] is False
     assert updated["dry_run"] is True
     assert updated["active_window_start"] == "10:00"
     assert updated["on_hit_handoff"] is True
+    assert updated["visible_in_window"] is True
+    assert repo.get_target(target["id"])["visible_in_window"] is True
 
     worker = repo.upsert_worker(account["id"], pid=123, status="running", started_at="now")
     assert worker["pid"] == 123

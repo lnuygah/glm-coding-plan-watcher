@@ -37,6 +37,7 @@ class TargetCreate(BaseModel):
     active_jitter_seconds: float = Field(default=1.0, ge=0)
     idle_interval_seconds: float = Field(default=600.0, ge=0)
     on_hit_handoff: bool = True
+    visible_in_window: bool = False
 
 
 class TargetUpdate(BaseModel):
@@ -54,6 +55,7 @@ class TargetUpdate(BaseModel):
     active_jitter_seconds: float | None = Field(default=None, ge=0)
     idle_interval_seconds: float | None = Field(default=None, ge=0)
     on_hit_handoff: bool | None = None
+    visible_in_window: bool | None = None
 
 
 class ServeOptions(BaseModel):
