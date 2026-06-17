@@ -29,6 +29,11 @@ dev = [
     "mypy>=1.10",
     "types-PyYAML>=6.0",
 ]
+server = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "websockets>=12.0",
+]
 # 可选：桌面通知（缺失时 notifier 自动降级，不影响运行）
 desktop = ["plyer>=2.1"]
 
