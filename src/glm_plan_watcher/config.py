@@ -53,6 +53,14 @@ class AppConfig(BaseSettings):
     refresh_interval_seconds: float = 90.0
     refresh_jitter_seconds: float = 30.0
     max_checks: int = 0  # 0 = 无限
+    # 可选开售窗口：未设置 start/end 时保持 refresh_interval_seconds ± jitter 的旧行为。
+    # 过低的快刷间隔可能触发站点限流/风控，反而买不到；代码会钳制到安全硬下限。
+    active_window_start: str = ""
+    active_window_end: str = ""
+    active_timezone: str = ""  # 空 = 本机本地时区；也可显式写 Asia/Shanghai
+    active_interval_seconds: float = 3.0
+    active_jitter_seconds: float = 1.0
+    idle_interval_seconds: float = 600.0
 
     # —— 浏览器 ——
     headless: bool = False
@@ -72,7 +80,13 @@ class AppConfig(BaseSettings):
     # —— 通知 ——
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
 
-    @field_validator("refresh_interval_seconds", "refresh_jitter_seconds")
+    @field_validator(
+        "refresh_interval_seconds",
+        "refresh_jitter_seconds",
+        "active_interval_seconds",
+        "active_jitter_seconds",
+        "idle_interval_seconds",
+    )
     @classmethod
     def _non_negative(cls, v: float) -> float:
         if v < 0:
@@ -88,7 +102,18 @@ class AppConfig(BaseSettings):
 
     @property
     def target(self) -> TargetSpec:
-        return TargetSpec(billing_cycle=self.billing_cycle, tier=self.tier)
+        return TargetSpec(
+            billing_cycle=self.billing_cycle,
+            tier=self.tier,
+            active_window_start=self.active_window_start,
+            active_window_end=self.active_window_end,
+            active_timezone=self.active_timezone,
+            active_interval_seconds=self.active_interval_seconds,
+            active_jitter_seconds=self.active_jitter_seconds,
+            idle_interval_seconds=self.idle_interval_seconds,
+            dry_run=self.dry_run,
+            auto_click_entry=self.auto_click_entry,
+        )
 
     @property
     def target_specs(self) -> list[TargetSpec]:
@@ -166,6 +191,17 @@ tier: Pro
 refresh_interval_seconds: 90
 refresh_jitter_seconds: 30
 max_checks: 0            # 0 = 无限循环；多目标时表示账号级扫描轮数
+
+# 可选开售窗口：未设置 active_window_start/end 时保持上面的低频节奏。
+# 时段内按 active_interval_seconds ± active_jitter_seconds 快刷；硬下限会防止 0 秒 spin。
+# 时段外最多按 idle_interval_seconds 低频检查，也会睡到下次窗口开始。
+# 过低间隔可能触发站点限流/风控，反而买不到。
+active_window_start: ""  # 例如 "10:00"
+active_window_end: ""    # 例如 "10:30"
+active_timezone: ""      # 空 = 本机本地时区；也可写 "Asia/Shanghai"
+active_interval_seconds: 3
+active_jitter_seconds: 1
+idle_interval_seconds: 600
 
 # 浏览器
 headless: false          # 首次登录请用 false（可视化）；watch 可设 true

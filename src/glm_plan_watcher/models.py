@@ -60,6 +60,15 @@ class TargetSpec(BaseModel):
 
     billing_cycle: BillingCycle
     tier: Tier
+    # Optional sale-window cadence. Empty start/end keeps the legacy account-level cadence.
+    active_window_start: str = ""
+    active_window_end: str = ""
+    active_timezone: str = ""  # Empty = local machine timezone.
+    active_interval_seconds: float = Field(default=3.0, ge=0)
+    active_jitter_seconds: float = Field(default=1.0, ge=0)
+    idle_interval_seconds: float = Field(default=600.0, ge=0)
+    dry_run: bool = False
+    auto_click_entry: bool = True
 
     def describe(self) -> str:
         return f"{self.billing_cycle.cn_label} / {self.tier.value}"
