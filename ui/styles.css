@@ -162,6 +162,59 @@ p {
   padding: 3px 8px;
 }
 
+.status-badge {
+  font-size: 12px;
+}
+
+.status-badge[data-status="running"] {
+  background: #e3f6e8;
+  color: #1f6b3a;
+}
+
+.status-badge[data-status="crashed"],
+.status-badge[data-status="exited"] {
+  background: #fdecec;
+  color: #8a2020;
+}
+
+.status-badge[data-status="login"],
+.status-badge[data-status="handoff"] {
+  background: #eef6ff;
+  color: #17436b;
+}
+
+.first-run-guide {
+  background: #eef6ff;
+  border: 1px solid #c5dcf3;
+  border-radius: 8px;
+  color: #17436b;
+  font-size: 13px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+}
+
+.login-prompt {
+  background: #fff8e5;
+  border: 1px solid #efd48c;
+  border-radius: 8px;
+  color: #6b5310;
+  font-size: 13px;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.actions .primary-action {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+  font-weight: 600;
+}
+
+.actions .secondary-action {
+  background: #fff;
+  color: #3a4350;
+}
+
 .profile {
   color: #5b6572;
   font-size: 13px;
@@ -204,6 +257,18 @@ p {
 .add-target summary {
   cursor: pointer;
   font-weight: 600;
+}
+
+.advanced-target {
+  display: grid;
+  gap: 10px;
+}
+
+.advanced-target summary {
+  color: #5b6572;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
 }
 
 .form-grid {

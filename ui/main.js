@@ -31,7 +31,8 @@ const translations = {
     startButton: "启动",
     stopButton: "停止",
     loginButton: "登录",
-    handoffButton: "付款衔接",
+    handoffButton: "接管付款",
+    handoffButtonTitle: "用可见浏览器接管去付款：打开可见浏览器，最多点击一次购买入口；最终支付必须人工确认。",
     saveButton: "保存",
     deleteButton: "删除",
     enabledStatus: "启用",
@@ -49,8 +50,15 @@ const translations = {
     timezonePlaceholder: "本机时区或 Asia/Shanghai",
     enabledLabel: "启用",
     dryRunLabel: "Dry run 安全模式",
-    clickEntryLabel: "handoff 时点击入口",
-    openHandoffLabel: "命中后打开 handoff",
+    clickEntryLabel: "接管时点击购买入口",
+    openHandoffLabel: "命中后自动接管付款",
+    visibleInWindowLabel: "开售时段用可见浏览器常驻（命中秒点）",
+    advancedSettingsLabel: "高级设置",
+    firstRunGuide: "① 登录 → ② 加任务 → ③ 开始监控",
+    startMonitorButton: "③ 开始监控",
+    addMonitorTaskPrimary: "② 添加监控任务",
+    needLoginPrompt: "该账号需要登录：请点「① 登录」，在弹出的可见浏览器中手动登录，完成后关闭浏览器。",
+    loginStepButton: "① 登录",
     failedToFetch:
       "Failed to fetch. 请检查 daemon URL/token、CORS，以及 127.0.0.1/localhost 是否绕过本机代理。",
     addTargetFailed: "添加 target 失败",
@@ -90,7 +98,8 @@ const translations = {
     startButton: "Start",
     stopButton: "Stop",
     loginButton: "Login",
-    handoffButton: "Handoff",
+    handoffButton: "Take over payment",
+    handoffButtonTitle: "Take over payment in a visible browser: opens a visible browser and may click the purchase entry once; final payment is manual.",
     saveButton: "Save",
     deleteButton: "Delete",
     enabledStatus: "enabled",
@@ -108,8 +117,15 @@ const translations = {
     timezonePlaceholder: "local or Asia/Shanghai",
     enabledLabel: "Enabled",
     dryRunLabel: "Dry run",
-    clickEntryLabel: "Click entry in handoff",
-    openHandoffLabel: "Open handoff on hit",
+    clickEntryLabel: "Click purchase entry on take-over",
+    openHandoffLabel: "Auto take over payment on hit",
+    visibleInWindowLabel: "Keep a visible browser during the sale window",
+    advancedSettingsLabel: "Advanced settings",
+    firstRunGuide: "① Login → ② Add task → ③ Start monitoring",
+    startMonitorButton: "③ Start monitoring",
+    addMonitorTaskPrimary: "② Add monitor task",
+    needLoginPrompt: "This account needs login: click 《① Login》, sign in manually in the visible browser, then close it.",
+    loginStepButton: "① Login",
     failedToFetch:
       "Failed to fetch. Check daemon URL/token, CORS, and local proxy bypass for 127.0.0.1/localhost.",
     addTargetFailed: "Add target failed",
@@ -173,6 +189,9 @@ const actionKeys = {
 
 let ws = null;
 const accountTargets = new Map();
+// Login state is not exposed by the API; we only flag accounts that emitted an
+// auth_required event so we can surface a prominent "needs login" prompt.
+const authRequiredAccounts = new Set();
 let currentLanguage = detectLanguage();
 
 function detectLanguage() {
@@ -242,8 +261,17 @@ function clearStatus() {
   statusEl.hidden = true;
 }
 
+// WKWebView (macOS) surfaces network failures as TypeErrors with messages other
+// than Chrome's "Failed to fetch"; map the common ones to the same friendly hint.
+const NETWORK_FAILURE_MESSAGES = new Set([
+  "Failed to fetch",
+  "Load failed",
+  "cancelled",
+  "The network connection was lost.",
+]);
+
 function errorText(error) {
-  if (error instanceof TypeError && error.message === "Failed to fetch") {
+  if (error instanceof TypeError && NETWORK_FAILURE_MESSAGES.has(error.message)) {
     return t("failedToFetch");
   }
   return error?.message || String(error);
@@ -273,22 +301,23 @@ async function loadAccounts() {
 function renderAccount(account, targets) {
   const row = document.createElement("article");
   row.className = "account";
+  const status = account.status || "stopped";
+  const hasTargets = targets.length > 0;
+  const needsLogin = authRequiredAccounts.has(account.id);
   row.innerHTML = `
     <div class="account-title">
       <div>
         <strong>${escapeHtml(account.display_name)}</strong>
         <div class="profile">${escapeHtml(account.user_data_dir)}</div>
       </div>
-      <span>${escapeHtml(accountStatusLabel(account.status || "stopped"))}</span>
+      <span class="status-badge" data-status="${escapeAttr(status)}">${escapeHtml(accountStatusLabel(status))}</span>
     </div>
+    ${needsLogin ? `<p class="login-prompt">${escapeHtml(t("needLoginPrompt"))}</p>` : ""}
     <div class="actions">
-      <button data-action="start">${escapeHtml(t("startButton"))}</button>
-      <button data-action="stop">${escapeHtml(t("stopButton"))}</button>
-      <button data-action="login">${escapeHtml(t("loginButton"))}</button>
-      <button data-action="handoff">${escapeHtml(t("handoffButton"))}</button>
+      ${accountActionsMarkup(status, hasTargets)}
     </div>
     <div class="targets"></div>
-    <details class="add-target" open>
+    <details class="add-target"${hasTargets ? "" : " open"}>
       <summary>${escapeHtml(t("addMonitorTask"))}</summary>
       <form class="target-form">
         ${targetFormFields()}
@@ -320,11 +349,24 @@ function renderAccount(account, targets) {
 
   row.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      await withUiError(t("actionFailed", { action: actionText(button.dataset.action) }), async () => {
-        const action = button.dataset.action;
+      const action = button.dataset.action;
+      // "addtarget" is a pure UI shortcut: reveal the add-target form, no API call.
+      if (action === "addtarget") {
+        const details = row.querySelector(".add-target");
+        if (details) {
+          details.open = true;
+          details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          details.querySelector('[name="billing_cycle"]')?.focus();
+        }
+        return;
+      }
+      await withUiError(t("actionFailed", { action: actionText(action) }), async () => {
         if (action === "start") await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
         if (action === "stop") await api(`/accounts/${account.id}/worker/stop`, { method: "POST" });
-        if (action === "login") await api(`/accounts/${account.id}/login`, { method: "POST", body: "{}" });
+        if (action === "login") {
+          await api(`/accounts/${account.id}/login`, { method: "POST", body: "{}" });
+          authRequiredAccounts.delete(account.id);
+        }
         if (action === "handoff") {
           await api(`/accounts/${account.id}/handoff`, {
             method: "POST",
@@ -336,6 +378,43 @@ function renderAccount(account, targets) {
     });
   });
   return row;
+}
+
+// Derive a single prominent primary call-to-action from (status + hasTargets),
+// demoting the rest to secondary. Login stays reachable as a labeled step since
+// the API does not expose login state.
+function accountActionsMarkup(status, hasTargets) {
+  const buttons = [];
+  const seen = new Set();
+  const add = (action, labelKey, { primary = false, titleKey } = {}) => {
+    if (seen.has(action)) return;
+    seen.add(action);
+    const cls = primary ? "primary-action" : "secondary-action";
+    const title = titleKey ? ` title="${escapeAttr(t(titleKey))}"` : "";
+    buttons.push(
+      `<button data-action="${escapeAttr(action)}" class="${cls}"${title}>${escapeHtml(t(labelKey))}</button>`,
+    );
+  };
+
+  if (status === "running") {
+    add("stop", "stopButton", { primary: true });
+  } else if (status === "login") {
+    add("login", "loginStepButton", { primary: true });
+  } else if (status === "handoff") {
+    add("handoff", "handoffButton", { primary: true, titleKey: "handoffButtonTitle" });
+  } else if (!hasTargets) {
+    add("addtarget", "addMonitorTaskPrimary", { primary: true });
+  } else {
+    add("start", "startMonitorButton", { primary: true });
+  }
+
+  // Labeled secondary steps. Login is always reachable.
+  add("login", "loginStepButton");
+  if (hasTargets && status !== "running") add("start", "startButton");
+  if (status === "running") add("stop", "stopButton");
+  add("handoff", "handoffButton", { titleKey: "handoffButtonTitle" });
+
+  return buttons.join("");
 }
 
 function renderTarget(account, target) {
@@ -350,7 +429,7 @@ function renderTarget(account, target) {
       ${targetFormFields(target)}
       <div class="target-actions">
         <button type="submit">${escapeHtml(t("saveButton"))}</button>
-        <button type="button" data-target-action="handoff">${escapeHtml(t("handoffButton"))}</button>
+        <button type="button" data-target-action="handoff" title="${escapeAttr(t("handoffButtonTitle"))}">${escapeHtml(t("handoffButton"))}</button>
         <button type="button" data-target-action="delete">${escapeHtml(t("deleteButton"))}</button>
       </div>
     </form>
@@ -413,14 +492,6 @@ function targetFormFields(target = {}) {
         </select>
       </label>
       <label>
-        ${escapeHtml(t("baseIntervalLabel"))}
-        <input name="interval" type="number" min="1" step="1" value="${numberValue(target.interval, 90)}" />
-      </label>
-      <label>
-        ${escapeHtml(t("baseJitterLabel"))}
-        <input name="jitter" type="number" min="0" step="1" value="${numberValue(target.jitter, 30)}" />
-      </label>
-      <label>
         ${escapeHtml(t("windowStartLabel"))}
         <input name="active_window_start" placeholder="10:00" value="${escapeAttr(target.active_window_start || "")}" />
       </label>
@@ -428,29 +499,45 @@ function targetFormFields(target = {}) {
         ${escapeHtml(t("windowEndLabel"))}
         <input name="active_window_end" placeholder="10:30" value="${escapeAttr(target.active_window_end || "")}" />
       </label>
-      <label>
-        ${escapeHtml(t("timezoneLabel"))}
-        <input name="active_timezone" placeholder="${escapeAttr(t("timezonePlaceholder"))}" value="${escapeAttr(target.active_timezone || "")}" />
-      </label>
-      <label>
-        ${escapeHtml(t("activeIntervalLabel"))}
-        <input name="active_interval_seconds" type="number" min="1" step="0.5" value="${numberValue(target.active_interval_seconds, 3)}" />
-      </label>
-      <label>
-        ${escapeHtml(t("activeJitterLabel"))}
-        <input name="active_jitter_seconds" type="number" min="0" step="0.5" value="${numberValue(target.active_jitter_seconds, 1)}" />
-      </label>
-      <label>
-        ${escapeHtml(t("idleIntervalLabel"))}
-        <input name="idle_interval_seconds" type="number" min="1" step="1" value="${numberValue(target.idle_interval_seconds, 600)}" />
-      </label>
     </div>
     <div class="checkbox-row">
       ${checkbox("enabled", target.enabled ?? true, t("enabledLabel"))}
-      ${checkbox("dry_run", target.dry_run ?? false, t("dryRunLabel"))}
-      ${checkbox("auto_click_entry", target.auto_click_entry ?? true, t("clickEntryLabel"))}
+      ${checkbox("visible_in_window", target.visible_in_window ?? false, t("visibleInWindowLabel"))}
       ${checkbox("on_hit_handoff", target.on_hit_handoff ?? true, t("openHandoffLabel"))}
     </div>
+    <details class="advanced-target">
+      <summary>${escapeHtml(t("advancedSettingsLabel"))}</summary>
+      <div class="form-grid">
+        <label>
+          ${escapeHtml(t("baseIntervalLabel"))}
+          <input name="interval" type="number" min="1" step="1" value="${numberValue(target.interval, 90)}" />
+        </label>
+        <label>
+          ${escapeHtml(t("baseJitterLabel"))}
+          <input name="jitter" type="number" min="0" step="1" value="${numberValue(target.jitter, 30)}" />
+        </label>
+        <label>
+          ${escapeHtml(t("timezoneLabel"))}
+          <input name="active_timezone" placeholder="${escapeAttr(t("timezonePlaceholder"))}" value="${escapeAttr(target.active_timezone || "")}" />
+        </label>
+        <label>
+          ${escapeHtml(t("activeIntervalLabel"))}
+          <input name="active_interval_seconds" type="number" min="1" step="0.5" value="${numberValue(target.active_interval_seconds, 3)}" />
+        </label>
+        <label>
+          ${escapeHtml(t("activeJitterLabel"))}
+          <input name="active_jitter_seconds" type="number" min="0" step="0.5" value="${numberValue(target.active_jitter_seconds, 1)}" />
+        </label>
+        <label>
+          ${escapeHtml(t("idleIntervalLabel"))}
+          <input name="idle_interval_seconds" type="number" min="1" step="1" value="${numberValue(target.idle_interval_seconds, 600)}" />
+        </label>
+      </div>
+      <div class="checkbox-row">
+        ${checkbox("dry_run", target.dry_run ?? false, t("dryRunLabel"))}
+        ${checkbox("auto_click_entry", target.auto_click_entry ?? true, t("clickEntryLabel"))}
+      </div>
+    </details>
   `;
 }
 
@@ -480,6 +567,8 @@ function targetPayloadFromForm(form) {
     active_jitter_seconds: numberFromForm(data, "active_jitter_seconds"),
     idle_interval_seconds: numberFromForm(data, "idle_interval_seconds"),
     on_hit_handoff: form.elements.on_hit_handoff.checked,
+    // Backend support is being added by a parallel task; send it regardless.
+    visible_in_window: form.elements.visible_in_window.checked,
   };
 }
 
@@ -511,6 +600,9 @@ function connectEvents() {
   ws.onmessage = (message) => {
     const payload = JSON.parse(message.data);
     prependEvent(payload);
+    if (payload.event?.button_state === "auth_required" && payload.account_id != null) {
+      authRequiredAccounts.add(payload.account_id);
+    }
     if (payload.event?.button_state === "auth_required" || payload.event?.type === "hit") {
       void withUiError(t("reloadAccountsFailed"), loadAccounts);
     }
