@@ -46,9 +46,13 @@ p {
   margin-top: 6px;
 }
 
-.toolbar label {
+.toolbar label,
+.connection {
   display: grid;
   gap: 6px;
+}
+
+.connection {
   min-width: 300px;
 }
 

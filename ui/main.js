@@ -1,4 +1,5 @@
 const daemonUrlInput = document.querySelector("#daemon-url");
+const daemonTokenInput = document.querySelector("#daemon-token");
 const accountsEl = document.querySelector("#accounts");
 const eventsEl = document.querySelector("#events");
 const refreshButton = document.querySelector("#refresh");
@@ -10,10 +11,18 @@ function daemonUrl() {
   return daemonUrlInput.value.replace(/\/$/, "");
 }
 
-async function api(path, init) {
+function daemonToken() {
+  return daemonTokenInput.value.trim();
+}
+
+async function api(path, init = {}) {
+  const headers = { "Content-Type": "application/json", ...(init.headers ?? {}) };
+  if (daemonToken()) {
+    headers.Authorization = `Bearer ${daemonToken()}`;
+  }
   const response = await fetch(`${daemonUrl()}${path}`, {
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     ...init,
+    headers,
   });
   if (!response.ok) {
     throw new Error(await response.text());
@@ -102,7 +111,9 @@ function renderTargetLabel(target) {
 function connectEvents() {
   ws?.close();
   const url = daemonUrl().replace(/^http/, "ws");
-  ws = new WebSocket(`${url}/ws/events`);
+  const token = daemonToken();
+  const query = token ? `?token=${encodeURIComponent(token)}` : "";
+  ws = new WebSocket(`${url}/ws/events${query}`);
   ws.onmessage = (message) => {
     const payload = JSON.parse(message.data);
     prependEvent(payload);
@@ -110,6 +121,29 @@ function connectEvents() {
       void loadAccounts();
     }
   };
+}
+
+async function loadHandshake() {
+  const invoke = window.__TAURI__?.core?.invoke;
+  if (!invoke) {
+    return;
+  }
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const handshake = await invoke("daemon_handshake").catch(() => null);
+    if (handshake?.host && handshake?.port && handshake?.token) {
+      daemonUrlInput.value = `http://${handshake.host}:${handshake.port}`;
+      daemonTokenInput.value = handshake.token;
+      return;
+    }
+    await sleep(250);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function prependEvent(payload) {
@@ -153,6 +187,11 @@ daemonUrlInput.addEventListener("change", () => {
   connectEvents();
   void loadAccounts();
 });
+daemonTokenInput.addEventListener("change", () => {
+  connectEvents();
+  void loadAccounts();
+});
 
+await loadHandshake();
 connectEvents();
 void loadAccounts();

@@ -37,7 +37,17 @@ Recommended P1/P2 shape:
 - The daemon starts one worker process per account.
 - Workers communicate upward using stdout JSON lines and SIGTERM/SIGINT for shutdown.
 
-Use a random localhost port plus a per-launch token. Do not expose the daemon on public interfaces.
+The daemon uses a random localhost port plus a per-launch bearer token. Tauri starts it with
+`--port 0`, passes or lets it generate a token, and reads a handshake file containing:
+
+```json
+{"host": "127.0.0.1", "port": 49152, "token": "..."}
+```
+
+`/health` is intentionally unauthenticated for liveness checks. All other REST routes require
+`Authorization: Bearer <token>`, and `/ws/events` requires `?token=<token>` or an equivalent
+subprotocol token. If no token is configured, Python generates one; anonymous daemon access is not
+allowed. Handshake files are local runtime secrets and must stay out of git.
 
 ## Data Model
 
@@ -78,13 +88,15 @@ The app must not click payment confirmation buttons, solve verification, or bypa
 
 Workers should remain low-frequency and jittered per account. Multi-target checks must be sequential inside one account session.
 
-Restock text such as "06月18日 10:00 补货" can be parsed as a scheduling hint:
+Restock text such as "06月18日 10:00 补货" is parsed as a scheduling hint:
 
 - Far from restock time: reduce checks.
 - Near restock time: temporarily tighten checks within safe minimum limits.
 - If parsing fails or text changes: fall back to the normal interval plus jitter.
 
-Restock parsing must never become aggressive polling.
+The scheduler combines the current year with the month/day/time shown on the page and handles
+obvious cross-year hints. Restock parsing must never become aggressive polling: every computed delay
+is clamped to the safe minimum and still applies jitter.
 
 ## Packaging
 
@@ -101,9 +113,9 @@ Avoid stdio between Tauri and the daemon except for boot diagnostics; localhost 
 ## Extension Points
 
 - `DetectorStrategy`: DOM detector now, compliant official API detector later if available.
-- `SiteAdapter`: future abstraction for URL, selectors, auth detection, target dimensions, and entry-click behavior.
+- `SiteAdapter`: GLM-specific URL, selectors, auth detection, target dimensions, and entry button selectors.
 - `Notifier`: console, desktop, webhook now; email or chat integrations later.
-- `SchedulerPolicy`: fixed interval now; restock-time hints later.
+- `SchedulerPolicy`: fixed interval fallback plus restock-time hints.
 
 Do not over-generalize before a second site/product exists. Keep GLM-specific selectors in the GLM adapter path.
 
@@ -125,4 +137,4 @@ The product should present itself as availability monitoring and handoff, not au
 - P0: account-level multi-target monitor, `auth_required`, heartbeat, architecture blueprint.
 - P1: local daemon with SQLite, task/account CRUD, worker supervision, restart/backoff, WebSocket event stream.
 - P2: Tauri menu-bar shell, sidecar packaging, login/payment visible handoff.
-- P3: restock-time scheduler hints, richer notifications, optional site adapter abstraction.
+- P3: daemon bearer auth, random-port handshake, restock-time scheduler hints, and GLM `SiteAdapter`.
