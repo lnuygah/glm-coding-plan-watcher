@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glm-coding-plan-watcher"
+version = "0.1.0"
+description = "监控 GLM Coding Plan 套餐可购买性的浏览器自动化 worker（仅用于个人可用性监控与提醒）"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "glm-coding-plan-watcher" }]
+keywords = ["playwright", "monitoring", "automation", "glm"]
+dependencies = [
+    "playwright>=1.44",
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "PyYAML>=6.0",
+    "rich>=13.7",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+]
+# 可选：桌面通知（缺失时 notifier 自动降级，不影响运行）
+desktop = ["plyer>=2.1"]
+
+[project.scripts]
+glm-plan = "glm_plan_watcher.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/your-name/glm-coding-plan-watcher"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+glm_plan_watcher = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W", "C4", "SIM"]
+ignore = ["E501"]  # 行长由 formatter 控制；中文注释偶有超长
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["glm_plan_watcher"]
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+# Playwright 等第三方库类型不全时按需放宽
+[[tool.mypy.overrides]]
+module = ["plyer.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+markers = [
+    "browser: 需要 Playwright + chromium 的测试（CI 无浏览器时可 -m 'not browser' 跳过）",
+]
