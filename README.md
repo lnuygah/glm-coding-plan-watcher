@@ -1,3 +1,7 @@
+English | [中文](README.zh-CN.md)
+
+<!-- Keep README.md and README.zh-CN.md in sync when changing onboarding docs. -->
+
 # glm-coding-plan-watcher
 
 Personal availability monitor for [GLM Coding Plan](https://www.bigmodel.cn/glm-coding) plans.
