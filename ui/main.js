@@ -5,7 +5,14 @@ const eventsEl = document.querySelector("#events");
 const refreshButton = document.querySelector("#refresh");
 const accountForm = document.querySelector("#account-form");
 
+const billingLabels = {
+  monthly: "连续包月",
+  quarterly: "连续包季",
+  yearly: "连续包年",
+};
+
 let ws = null;
+const accountTargets = new Map();
 
 function daemonUrl() {
   return daemonUrlInput.value.replace(/\/$/, "");
@@ -36,8 +43,10 @@ async function api(path, init = {}) {
 async function loadAccounts() {
   const accounts = await api("/accounts");
   accountsEl.innerHTML = "";
+  accountTargets.clear();
   for (const account of accounts) {
     const targets = await api(`/accounts/${account.id}/targets`);
+    accountTargets.set(account.id, targets);
     accountsEl.append(renderAccount(account, targets));
   }
 }
@@ -47,42 +56,44 @@ function renderAccount(account, targets) {
   row.className = "account";
   row.innerHTML = `
     <div class="account-title">
-      <strong>${escapeHtml(account.display_name)}</strong>
+      <div>
+        <strong>${escapeHtml(account.display_name)}</strong>
+        <div class="profile">${escapeHtml(account.user_data_dir)}</div>
+      </div>
       <span>${escapeHtml(account.status || "stopped")}</span>
     </div>
-    <div class="profile">${escapeHtml(account.user_data_dir)}</div>
-    <div class="targets">${targets.map(renderTargetLabel).join("") || "<em>No targets</em>"}</div>
-    <form class="target-form">
-      <select name="billing_cycle">
-        <option value="monthly">monthly</option>
-        <option value="quarterly">quarterly</option>
-        <option value="yearly">yearly</option>
-      </select>
-      <select name="tier">
-        <option value="Lite">Lite</option>
-        <option value="Pro">Pro</option>
-        <option value="Max">Max</option>
-      </select>
-      <button type="submit">Add target</button>
-    </form>
     <div class="actions">
       <button data-action="start">Start</button>
       <button data-action="stop">Stop</button>
       <button data-action="login">Login</button>
       <button data-action="handoff">Handoff</button>
     </div>
+    <div class="targets"></div>
+    <details class="add-target" open>
+      <summary>Add monitor task</summary>
+      <form class="target-form">
+        ${targetFormFields()}
+        <button type="submit">Add target</button>
+      </form>
+    </details>
   `;
+
+  const targetsContainer = row.querySelector(".targets");
+  if (targets.length === 0) {
+    targetsContainer.innerHTML = "<em>No targets</em>";
+  } else {
+    for (const target of targets) {
+      targetsContainer.append(renderTarget(account, target));
+    }
+  }
 
   row.querySelector(".target-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
     await api(`/accounts/${account.id}/targets`, {
       method: "POST",
-      body: JSON.stringify({
-        billing_cycle: form.get("billing_cycle"),
-        tier: form.get("tier"),
-      }),
+      body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
     });
+    event.currentTarget.reset();
     await loadAccounts();
   });
 
@@ -104,8 +115,157 @@ function renderAccount(account, targets) {
   return row;
 }
 
-function renderTargetLabel(target) {
-  return `<span class="target">${escapeHtml(target.billing_cycle)} / ${escapeHtml(target.tier)}</span>`;
+function renderTarget(account, target) {
+  const item = document.createElement("article");
+  item.className = "target-card";
+  item.innerHTML = `
+    <div class="target-title">
+      <strong>${escapeHtml(target.billing_cycle)} / ${escapeHtml(target.tier)}</strong>
+      <span>${target.enabled ? "enabled" : "disabled"}</span>
+    </div>
+    <form class="target-edit-form">
+      ${targetFormFields(target)}
+      <div class="target-actions">
+        <button type="submit">Save</button>
+        <button type="button" data-target-action="handoff">Handoff</button>
+        <button type="button" data-target-action="delete">Delete</button>
+      </div>
+    </form>
+  `;
+  setSelectValue(item, "billing_cycle", target.billing_cycle);
+  setSelectValue(item, "tier", target.tier);
+
+  item.querySelector(".target-edit-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await api(`/targets/${target.id}`, {
+      method: "PATCH",
+      body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
+    });
+    await loadAccounts();
+  });
+
+  item.querySelector('[data-target-action="handoff"]').addEventListener("click", async () => {
+    await api(`/accounts/${account.id}/handoff`, {
+      method: "POST",
+      body: JSON.stringify({
+        target_id: target.id,
+        click_entry: Boolean(target.auto_click_entry),
+        restore_worker: false,
+      }),
+    });
+    await loadAccounts();
+  });
+
+  item.querySelector('[data-target-action="delete"]').addEventListener("click", async () => {
+    await api(`/targets/${target.id}`, { method: "DELETE" });
+    await loadAccounts();
+  });
+
+  return item;
+}
+
+function targetFormFields(target = {}) {
+  return `
+    <div class="form-grid">
+      <label>
+        Billing
+        <select name="billing_cycle">
+          <option value="monthly">monthly</option>
+          <option value="quarterly">quarterly</option>
+          <option value="yearly">yearly</option>
+        </select>
+      </label>
+      <label>
+        Tier
+        <select name="tier">
+          <option value="Lite">Lite</option>
+          <option value="Pro" selected>Pro</option>
+          <option value="Max">Max</option>
+        </select>
+      </label>
+      <label>
+        Base interval
+        <input name="interval" type="number" min="1" step="1" value="${numberValue(target.interval, 90)}" />
+      </label>
+      <label>
+        Base jitter
+        <input name="jitter" type="number" min="0" step="1" value="${numberValue(target.jitter, 30)}" />
+      </label>
+      <label>
+        Window start
+        <input name="active_window_start" placeholder="10:00" value="${escapeAttr(target.active_window_start || "")}" />
+      </label>
+      <label>
+        Window end
+        <input name="active_window_end" placeholder="10:30" value="${escapeAttr(target.active_window_end || "")}" />
+      </label>
+      <label>
+        Timezone
+        <input name="active_timezone" placeholder="local or Asia/Shanghai" value="${escapeAttr(target.active_timezone || "")}" />
+      </label>
+      <label>
+        Active interval
+        <input name="active_interval_seconds" type="number" min="1" step="0.5" value="${numberValue(target.active_interval_seconds, 3)}" />
+      </label>
+      <label>
+        Active jitter
+        <input name="active_jitter_seconds" type="number" min="0" step="0.5" value="${numberValue(target.active_jitter_seconds, 1)}" />
+      </label>
+      <label>
+        Idle interval
+        <input name="idle_interval_seconds" type="number" min="1" step="1" value="${numberValue(target.idle_interval_seconds, 600)}" />
+      </label>
+    </div>
+    <div class="checkbox-row">
+      ${checkbox("enabled", target.enabled ?? true, "Enabled")}
+      ${checkbox("dry_run", target.dry_run ?? false, "Dry run")}
+      ${checkbox("auto_click_entry", target.auto_click_entry ?? true, "Click entry in handoff")}
+      ${checkbox("on_hit_handoff", target.on_hit_handoff ?? true, "Open handoff on hit")}
+    </div>
+  `;
+}
+
+function checkbox(name, checked, label) {
+  return `
+    <label>
+      <input name="${name}" type="checkbox" ${checked ? "checked" : ""} />
+      ${label}
+    </label>
+  `;
+}
+
+function targetPayloadFromForm(form) {
+  const data = new FormData(form);
+  return {
+    billing_cycle: data.get("billing_cycle"),
+    tier: data.get("tier"),
+    enabled: form.elements.enabled.checked,
+    interval: numberFromForm(data, "interval"),
+    jitter: numberFromForm(data, "jitter"),
+    dry_run: form.elements.dry_run.checked,
+    auto_click_entry: form.elements.auto_click_entry.checked,
+    active_window_start: String(data.get("active_window_start") || "").trim(),
+    active_window_end: String(data.get("active_window_end") || "").trim(),
+    active_timezone: String(data.get("active_timezone") || "").trim(),
+    active_interval_seconds: numberFromForm(data, "active_interval_seconds"),
+    active_jitter_seconds: numberFromForm(data, "active_jitter_seconds"),
+    idle_interval_seconds: numberFromForm(data, "idle_interval_seconds"),
+    on_hit_handoff: form.elements.on_hit_handoff.checked,
+  };
+}
+
+function numberFromForm(data, key) {
+  const value = Number(data.get(key));
+  return Number.isFinite(value) ? value : 0;
+}
+
+function numberValue(value, fallback) {
+  return Number.isFinite(Number(value)) ? Number(value) : fallback;
+}
+
+function setSelectValue(root, name, value) {
+  const select = root.querySelector(`[name="${name}"]`);
+  if (select) select.value = value;
 }
 
 function connectEvents() {
@@ -117,7 +277,7 @@ function connectEvents() {
   ws.onmessage = (message) => {
     const payload = JSON.parse(message.data);
     prependEvent(payload);
-    if (payload.event?.button_state === "auth_required") {
+    if (payload.event?.button_state === "auth_required" || payload.event?.type === "hit") {
       void loadAccounts();
     }
   };
@@ -147,12 +307,61 @@ function sleep(ms) {
 }
 
 function prependEvent(payload) {
-  const item = document.createElement("pre");
-  item.textContent = JSON.stringify(payload, null, 2);
+  const item = document.createElement("article");
+  item.className = "event-card";
+  const event = payload.event ?? {};
+  const actions = document.createElement("div");
+  actions.className = "event-actions";
+
+  if (event.button_state === "auth_required") {
+    actions.append(eventButton("Login", () => api(`/accounts/${payload.account_id}/login`, {
+      method: "POST",
+      body: "{}",
+    })));
+  }
+  if (event.type === "hit" && event.available) {
+    actions.append(eventButton("Handoff", () => handoffForEvent(payload)));
+  }
+
+  const pre = document.createElement("pre");
+  pre.textContent = JSON.stringify(payload, null, 2);
+  item.append(actions, pre);
   eventsEl.prepend(item);
   while (eventsEl.children.length > 80) {
     eventsEl.lastElementChild?.remove();
   }
+}
+
+function eventButton(label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", async () => {
+    await onClick();
+    await loadAccounts();
+  });
+  return button;
+}
+
+async function handoffForEvent(payload) {
+  const target = targetForEvent(payload);
+  await api(`/accounts/${payload.account_id}/handoff`, {
+    method: "POST",
+    body: JSON.stringify({
+      target_id: target?.id,
+      click_entry: Boolean(target?.auto_click_entry),
+      restore_worker: false,
+    }),
+  });
+}
+
+function targetForEvent(payload) {
+  const targets = accountTargets.get(payload.account_id) ?? [];
+  return targets.find((target) => targetLabel(target) === payload.event?.target);
+}
+
+function targetLabel(target) {
+  return `${billingLabels[target.billing_cycle] || target.billing_cycle} / ${target.tier}`;
 }
 
 function escapeHtml(value) {
@@ -166,6 +375,10 @@ function escapeHtml(value) {
     };
     return entities[char];
   });
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value);
 }
 
 accountForm.addEventListener("submit", async (event) => {

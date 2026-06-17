@@ -80,7 +80,8 @@ p {
 .panel-header,
 .form-row,
 .actions,
-.target-form {
+.target-actions,
+.event-actions {
   display: flex;
   gap: 8px;
 }
@@ -129,11 +130,79 @@ p {
 .profile {
   color: #5b6572;
   font-size: 13px;
+  margin-top: 4px;
 }
 
 .targets {
+  display: grid;
+  gap: 10px;
+}
+
+.target-card {
+  background: #f9fafb;
+  border: 1px solid #e1e5ea;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.target-title {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.target-title span {
+  background: #eef2f6;
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+.target-form,
+.target-edit-form,
+.add-target {
+  display: grid;
+  gap: 10px;
+}
+
+.add-target summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.form-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid label {
+  color: #5b6572;
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.checkbox-row {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.checkbox-row label {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.target-actions,
+.event-actions {
+  flex-wrap: wrap;
+}
+
+.event-card {
+  display: grid;
   gap: 6px;
 }
 
@@ -145,4 +214,20 @@ p {
   margin: 0;
   overflow: auto;
   padding: 10px;
+}
+
+@media (max-width: 820px) {
+  .toolbar,
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
 }

@@ -11,7 +11,7 @@
       <section class="toolbar">
         <div>
           <h1>GLM Plan Watcher</h1>
-          <p>后台低频监控；登录和付款由可见浏览器交给用户人工完成。</p>
+          <p>后台 headless 监控；登录和命中付款衔接才打开可见浏览器。</p>
         </div>
         <div class="connection">
           <label>
@@ -26,7 +26,7 @@
       </section>
 
       <section class="notice">
-        不保存账号密码，不处理验证码/风控，不自动付款。Handoff 只打开可见浏览器；是否点击购买入口由用户显式选择，后续支付必须人工确认。
+        可为每个 target 配置开售窗口与快刷间隔。过低间隔可能触发限流/风控，反而买不到；Handoff 只打开可见浏览器并可点击一次购买入口，后续支付必须人工确认。
       </section>
 
       <section class="grid">
