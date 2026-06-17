@@ -17,9 +17,8 @@ from glm_plan_watcher.config import DEFAULT_URL
 from glm_plan_watcher.daemon.ingest import EventBroadcaster, ingest_stream
 from glm_plan_watcher.db import Repository
 from glm_plan_watcher.models import BillingCycle, TargetSpec, Tier, WatchEvent
+from glm_plan_watcher.scheduler import MIN_INTERVAL_SECONDS, MIN_JITTER_SECONDS
 
-MIN_INTERVAL_SECONDS = 30.0
-MIN_JITTER_SECONDS = 5.0
 INITIAL_RESTART_BACKOFF_SECONDS = 1.0
 MAX_RESTART_BACKOFF_SECONDS = 60.0
 
