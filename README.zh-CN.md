@@ -365,6 +365,9 @@ export no_proxy=127.0.0.1,localhost
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 ```
 
+如果 GUI 显示 `Failed to fetch` 或账号列表加载不出来，也要检查 macOS 系统代理设置，把
+`127.0.0.1` / `localhost` 加入绕过代理列表。
+
 ### Playwright 无法启动 Chromium
 
 为 Playwright 安装 Chromium：

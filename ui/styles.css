@@ -64,6 +64,25 @@ p {
   padding: 12px 14px;
 }
 
+.status {
+  border-radius: 8px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+}
+
+.status[data-kind="error"] {
+  background: #fff1f1;
+  border: 1px solid #e5a5a5;
+  color: #7a1d1d;
+}
+
+.status[data-kind="info"] {
+  background: #eef6ff;
+  border: 1px solid #a9caed;
+  color: #17436b;
+}
+
 .grid {
   display: grid;
   gap: 16px;

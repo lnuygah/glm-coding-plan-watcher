@@ -389,6 +389,9 @@ or clear proxy variables for this shell:
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 ```
 
+If the GUI shows `Failed to fetch` or does not load accounts, also check the macOS system proxy
+settings and add `127.0.0.1` / `localhost` to the bypass list.
+
 ### Playwright cannot launch Chromium
 
 Install Chromium for Playwright:

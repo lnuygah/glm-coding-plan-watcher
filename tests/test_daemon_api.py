@@ -178,6 +178,40 @@ def test_daemon_auth_and_health_exemption(tmp_path: Path) -> None:
     assert client.get("/accounts", headers=AUTH_HEADERS).status_code == 200
 
 
+def test_daemon_cors_headers_for_tauri_origin(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    response = client.get(
+        "/accounts",
+        headers={
+            **AUTH_HEADERS,
+            "Origin": "tauri://localhost",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_daemon_cors_preflight_is_not_blocked_by_auth(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    response = client.options(
+        "/accounts",
+        headers={
+            "Origin": "tauri://localhost",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "authorization" in response.headers["access-control-allow-headers"].lower()
+
+
 def test_daemon_auto_generates_token_when_missing(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "daemon.sqlite3")
     app = create_app(repository=repo)

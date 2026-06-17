@@ -4,6 +4,7 @@ const accountsEl = document.querySelector("#accounts");
 const eventsEl = document.querySelector("#events");
 const refreshButton = document.querySelector("#refresh");
 const accountForm = document.querySelector("#account-form");
+const statusEl = document.querySelector("#status");
 
 const billingLabels = {
   monthly: "连续包月",
@@ -32,12 +33,41 @@ async function api(path, init = {}) {
     headers,
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    const body = await response.text();
+    throw new Error(`${response.status} ${response.statusText}${body ? `: ${body}` : ""}`);
   }
   if (response.status === 204) {
     return undefined;
   }
   return await response.json();
+}
+
+function showStatus(message, kind = "error") {
+  statusEl.textContent = message;
+  statusEl.dataset.kind = kind;
+  statusEl.hidden = false;
+}
+
+function clearStatus() {
+  statusEl.textContent = "";
+  statusEl.hidden = true;
+}
+
+function errorText(error) {
+  if (error instanceof TypeError && error.message === "Failed to fetch") {
+    return "Failed to fetch. Check daemon URL/token, CORS, and local proxy bypass for 127.0.0.1/localhost.";
+  }
+  return error?.message || String(error);
+}
+
+async function withUiError(label, action) {
+  try {
+    clearStatus();
+    return await action();
+  } catch (error) {
+    showStatus(`${label}: ${errorText(error)}`);
+    return undefined;
+  }
 }
 
 async function loadAccounts() {
@@ -89,27 +119,31 @@ function renderAccount(account, targets) {
 
   row.querySelector(".target-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await api(`/accounts/${account.id}/targets`, {
-      method: "POST",
-      body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
+    await withUiError("Add target failed", async () => {
+      await api(`/accounts/${account.id}/targets`, {
+        method: "POST",
+        body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
+      });
+      event.currentTarget.reset();
+      await loadAccounts();
     });
-    event.currentTarget.reset();
-    await loadAccounts();
   });
 
   row.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const action = button.dataset.action;
-      if (action === "start") await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
-      if (action === "stop") await api(`/accounts/${account.id}/worker/stop`, { method: "POST" });
-      if (action === "login") await api(`/accounts/${account.id}/login`, { method: "POST", body: "{}" });
-      if (action === "handoff") {
-        await api(`/accounts/${account.id}/handoff`, {
-          method: "POST",
-          body: JSON.stringify({ click_entry: false }),
-        });
-      }
-      await loadAccounts();
+      await withUiError(`${button.dataset.action} failed`, async () => {
+        const action = button.dataset.action;
+        if (action === "start") await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
+        if (action === "stop") await api(`/accounts/${account.id}/worker/stop`, { method: "POST" });
+        if (action === "login") await api(`/accounts/${account.id}/login`, { method: "POST", body: "{}" });
+        if (action === "handoff") {
+          await api(`/accounts/${account.id}/handoff`, {
+            method: "POST",
+            body: JSON.stringify({ click_entry: false }),
+          });
+        }
+        await loadAccounts();
+      });
     });
   });
   return row;
@@ -137,28 +171,34 @@ function renderTarget(account, target) {
 
   item.querySelector(".target-edit-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await api(`/targets/${target.id}`, {
-      method: "PATCH",
-      body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
+    await withUiError("Save target failed", async () => {
+      await api(`/targets/${target.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
+      });
+      await loadAccounts();
     });
-    await loadAccounts();
   });
 
   item.querySelector('[data-target-action="handoff"]').addEventListener("click", async () => {
-    await api(`/accounts/${account.id}/handoff`, {
-      method: "POST",
-      body: JSON.stringify({
-        target_id: target.id,
-        click_entry: Boolean(target.auto_click_entry),
-        restore_worker: false,
-      }),
+    await withUiError("Handoff failed", async () => {
+      await api(`/accounts/${account.id}/handoff`, {
+        method: "POST",
+        body: JSON.stringify({
+          target_id: target.id,
+          click_entry: Boolean(target.auto_click_entry),
+          restore_worker: false,
+        }),
+      });
+      await loadAccounts();
     });
-    await loadAccounts();
   });
 
   item.querySelector('[data-target-action="delete"]').addEventListener("click", async () => {
-    await api(`/targets/${target.id}`, { method: "DELETE" });
-    await loadAccounts();
+    await withUiError("Delete target failed", async () => {
+      await api(`/targets/${target.id}`, { method: "DELETE" });
+      await loadAccounts();
+    });
   });
 
   return item;
@@ -273,12 +313,25 @@ function connectEvents() {
   const url = daemonUrl().replace(/^http/, "ws");
   const token = daemonToken();
   const query = token ? `?token=${encodeURIComponent(token)}` : "";
-  ws = new WebSocket(`${url}/ws/events${query}`);
+  try {
+    ws = new WebSocket(`${url}/ws/events${query}`);
+  } catch (error) {
+    showStatus(`Connect events failed: ${errorText(error)}`);
+    return;
+  }
   ws.onmessage = (message) => {
     const payload = JSON.parse(message.data);
     prependEvent(payload);
     if (payload.event?.button_state === "auth_required" || payload.event?.type === "hit") {
-      void loadAccounts();
+      void withUiError("Reload accounts failed", loadAccounts);
+    }
+  };
+  ws.onerror = () => {
+    showStatus("WebSocket connection failed. Check daemon URL/token and local proxy bypass.");
+  };
+  ws.onclose = (event) => {
+    if (event.code !== 1000) {
+      showStatus(`WebSocket closed: code=${event.code}`, "info");
     }
   };
 }
@@ -286,6 +339,7 @@ function connectEvents() {
 async function loadHandshake() {
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) {
+    showStatus("Tauri bridge is unavailable; fill Daemon and Token manually.", "info");
     return;
   }
 
@@ -298,6 +352,7 @@ async function loadHandshake() {
     }
     await sleep(250);
   }
+  showStatus("Daemon handshake was not found. Check that the Tauri sidecar daemon started.", "error");
 }
 
 function sleep(ms) {
@@ -337,8 +392,10 @@ function eventButton(label, onClick) {
   button.type = "button";
   button.textContent = label;
   button.addEventListener("click", async () => {
-    await onClick();
-    await loadAccounts();
+    await withUiError(`${label} failed`, async () => {
+      await onClick();
+      await loadAccounts();
+    });
   });
   return button;
 }
@@ -384,27 +441,29 @@ function escapeAttr(value) {
 accountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(accountForm);
-  await api("/accounts", {
-    method: "POST",
-    body: JSON.stringify({
-      display_name: form.get("display_name"),
-      user_data_dir: form.get("user_data_dir"),
-    }),
+  await withUiError("Add account failed", async () => {
+    await api("/accounts", {
+      method: "POST",
+      body: JSON.stringify({
+        display_name: form.get("display_name"),
+        user_data_dir: form.get("user_data_dir"),
+      }),
+    });
+    accountForm.reset();
+    await loadAccounts();
   });
-  accountForm.reset();
-  await loadAccounts();
 });
 
-refreshButton.addEventListener("click", () => void loadAccounts());
+refreshButton.addEventListener("click", () => void withUiError("Refresh failed", loadAccounts));
 daemonUrlInput.addEventListener("change", () => {
   connectEvents();
-  void loadAccounts();
+  void withUiError("Load accounts failed", loadAccounts);
 });
 daemonTokenInput.addEventListener("change", () => {
   connectEvents();
-  void loadAccounts();
+  void withUiError("Load accounts failed", loadAccounts);
 });
 
 await loadHandshake();
 connectEvents();
-void loadAccounts();
+void withUiError("Load accounts failed", loadAccounts);

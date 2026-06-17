@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from glm_plan_watcher.daemon.api_models import (
@@ -43,6 +44,12 @@ def create_app(
     daemon_token = resolve_token(token)
 
     app = FastAPI(title="GLM Plan Watcher Daemon")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.repository = repo
     app.state.broadcaster = events
     app.state.supervisor = workers
@@ -50,7 +57,7 @@ def create_app(
 
     @app.middleware("http")
     async def require_bearer_token(request: Request, call_next: Any) -> JSONResponse:
-        if request.url.path == "/health":
+        if request.method == "OPTIONS" or request.url.path == "/health":
             return await call_next(request)
         if not authorized_bearer(request.headers.get("authorization"), daemon_token):
             return JSONResponse(
