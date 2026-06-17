@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from glm_plan_watcher.models import BillingCycle, ButtonState, CheckResult, TargetSpec, Tier
 from glm_plan_watcher.scheduler import MIN_INTERVAL_SECONDS, SchedulerPolicy, parse_restock_datetime
@@ -86,3 +87,124 @@ def test_scheduler_ignores_non_sold_out_hints() -> None:
     )
 
     assert policy.next_delay([result("06月18日 10:00 补货", ButtonState.disabled)]) == 120
+
+
+def test_scheduler_active_window_uses_fast_interval() -> None:
+    now = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=0,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        active_interval_seconds=3,
+        active_jitter_seconds=0,
+        now_fn=lambda: now,
+    )
+
+    assert policy.next_delay([]) == 3
+
+
+def test_scheduler_active_window_clamps_too_low_interval_and_jitter() -> None:
+    now = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=0,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        active_interval_seconds=0.1,
+        active_jitter_seconds=2,
+        now_fn=lambda: now,
+        random_fn=lambda _low, _high: -2,
+    )
+
+    assert policy.next_delay([]) == 1
+
+
+def test_scheduler_outside_active_window_uses_idle_or_next_window() -> None:
+    now = datetime(2026, 6, 17, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=0,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        idle_interval_seconds=600,
+        active_jitter_seconds=0,
+        now_fn=lambda: now,
+    )
+
+    assert policy.next_delay([]) == 600
+
+    near_start = datetime(2026, 6, 17, 9, 59, 55, tzinfo=ZoneInfo("Asia/Shanghai"))
+    policy.now_fn = lambda: near_start
+    assert policy.next_delay([]) == 5
+
+
+def test_scheduler_outside_active_window_clamps_too_low_idle_interval() -> None:
+    now = datetime(2026, 6, 17, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=0,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        idle_interval_seconds=1,
+        active_jitter_seconds=0,
+        now_fn=lambda: now,
+    )
+
+    assert policy.next_delay([]) == MIN_INTERVAL_SECONDS
+
+
+def test_scheduler_active_window_supports_cross_midnight() -> None:
+    now = datetime(2026, 6, 18, 0, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=0,
+        active_window_start="23:00",
+        active_window_end="01:00",
+        active_timezone="Asia/Shanghai",
+        active_interval_seconds=3,
+        active_jitter_seconds=0,
+        now_fn=lambda: now,
+    )
+
+    assert policy.next_delay([]) == 3
+
+
+def test_scheduler_active_window_uses_explicit_timezone() -> None:
+    now = datetime(2026, 6, 17, 2, 5, tzinfo=UTC)
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=0,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        active_interval_seconds=3,
+        active_jitter_seconds=0,
+        now_fn=lambda: now,
+    )
+
+    assert policy.next_delay([]) == 3
+
+
+def test_scheduler_uses_target_specific_active_window() -> None:
+    now = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    target = TargetSpec(
+        billing_cycle=BillingCycle.monthly,
+        tier=Tier.Pro,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        active_interval_seconds=4,
+        active_jitter_seconds=0,
+    )
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=0,
+        now_fn=lambda: now,
+    )
+
+    assert policy.next_delay([CheckResult(target=target, state=ButtonState.sold_out)]) == 4

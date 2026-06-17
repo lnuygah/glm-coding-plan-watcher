@@ -6,12 +6,19 @@ import random
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from glm_plan_watcher.models import ButtonState, CheckResult
 
 MIN_INTERVAL_SECONDS = 30.0
 MIN_JITTER_SECONDS = 5.0
+ACTIVE_MIN_INTERVAL_SECONDS = 1.0
+DEFAULT_ACTIVE_INTERVAL_SECONDS = 3.0
+DEFAULT_ACTIVE_JITTER_SECONDS = 1.0
+DEFAULT_IDLE_INTERVAL_SECONDS = 600.0
+
+_HHMM_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})$")
 
 _RESTOCK_RE = re.compile(
     r"(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日\s*"
@@ -64,11 +71,22 @@ class SchedulerPolicy:
     near_window_seconds: float = 10 * 60.0
     far_window_seconds: float = 6 * 60 * 60.0
     max_hint_interval_seconds: float = 60 * 60.0
+    active_window_start: str = ""
+    active_window_end: str = ""
+    active_timezone: str = ""
+    active_interval_seconds: float = DEFAULT_ACTIVE_INTERVAL_SECONDS
+    active_jitter_seconds: float = DEFAULT_ACTIVE_JITTER_SECONDS
+    idle_interval_seconds: float = DEFAULT_IDLE_INTERVAL_SECONDS
+    active_min_interval_seconds: float = ACTIVE_MIN_INTERVAL_SECONDS
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC)
     random_fn: Callable[[float, float], float] = random.uniform
 
     def next_delay(self, results: Sequence[CheckResult] = ()) -> float:
         """Return next delay in seconds, clamped to the safe minimum."""
+
+        active_delay = self._active_window_delay(results)
+        if active_delay is not None:
+            return active_delay
 
         base = self._base_delay_from_restock_hints(results)
         if base is None:
@@ -104,3 +122,139 @@ class SchedulerPolicy:
         if self.jitter_seconds <= 0:
             return 0.0
         return self.random_fn(-self.jitter_seconds, self.jitter_seconds)
+
+    def _active_window_delay(self, results: Sequence[CheckResult]) -> float | None:
+        """Return active-window cadence if any configured window applies.
+
+        Active-window fast polling is opt-in and clamped to a separate hard minimum. Very low
+        intervals can trigger site rate limits/risk controls and reduce the chance of purchase, so
+        the minimum deliberately never reaches zero.
+        """
+
+        now = self.now_fn()
+        candidates: list[float] = []
+        policy_candidate = self._delay_from_window_values(
+            start_text=self.active_window_start,
+            end_text=self.active_window_end,
+            timezone_name=self.active_timezone,
+            active_interval_seconds=self.active_interval_seconds,
+            active_jitter_seconds=self.active_jitter_seconds,
+            idle_interval_seconds=self.idle_interval_seconds,
+            hint_delay=self._base_delay_from_restock_hints(results),
+            now=now,
+        )
+        if policy_candidate is not None:
+            candidates.append(policy_candidate)
+
+        for result in results:
+            target = result.target
+            target_candidate = self._delay_from_window_values(
+                start_text=target.active_window_start,
+                end_text=target.active_window_end,
+                timezone_name=target.active_timezone,
+                active_interval_seconds=target.active_interval_seconds,
+                active_jitter_seconds=target.active_jitter_seconds,
+                idle_interval_seconds=target.idle_interval_seconds,
+                hint_delay=self._base_delay_from_restock_hints([result]),
+                now=now,
+            )
+            if target_candidate is not None:
+                candidates.append(target_candidate)
+
+        return min(candidates) if candidates else None
+
+    def _delay_from_window_values(
+        self,
+        *,
+        start_text: str,
+        end_text: str,
+        timezone_name: str,
+        active_interval_seconds: float,
+        active_jitter_seconds: float,
+        idle_interval_seconds: float,
+        hint_delay: float | None,
+        now: datetime,
+    ) -> float | None:
+        start = _parse_hhmm(start_text)
+        end = _parse_hhmm(end_text)
+        if start is None or end is None:
+            return None
+
+        local_now = _localize_now(now, timezone_name)
+        if _in_window(local_now.time(), start, end):
+            base = max(self.active_min_interval_seconds, active_interval_seconds)
+            lower_bound = self.active_min_interval_seconds
+        else:
+            seconds_to_start = _seconds_until_next_start(local_now, start, end)
+            base = min(
+                max(self.min_interval_seconds, idle_interval_seconds),
+                seconds_to_start,
+            )
+            lower_bound = max(
+                self.active_min_interval_seconds,
+                min(self.min_interval_seconds, seconds_to_start),
+            )
+
+        if hint_delay is not None:
+            base = min(base, hint_delay)
+
+        jittered = base + _bounded_jitter(active_jitter_seconds, self.random_fn)
+        return max(lower_bound, jittered)
+
+
+def _parse_hhmm(value: str) -> time | None:
+    match = _HHMM_RE.match(value.strip())
+    if match is None:
+        return None
+    try:
+        return time(hour=int(match.group("hour")), minute=int(match.group("minute")))
+    except ValueError:
+        return None
+
+
+def _localize_now(now: datetime, timezone_name: str) -> datetime:
+    zone = _resolve_timezone(timezone_name)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=zone)
+    return now.astimezone(zone)
+
+
+def _resolve_timezone(timezone_name: str) -> tzinfo:
+    if timezone_name.strip():
+        try:
+            return ZoneInfo(timezone_name.strip())
+        except ZoneInfoNotFoundError:
+            return datetime.now().astimezone().tzinfo or UTC
+    return datetime.now().astimezone().tzinfo or UTC
+
+
+def _in_window(current: time, start: time, end: time) -> bool:
+    if start == end:
+        return True
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
+
+
+def _seconds_until_next_start(now: datetime, start: time, end: time) -> float:
+    today_start = now.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
+    if start == end:
+        return 0.0
+    if _in_window(now.time(), start, end):
+        return 0.0
+    if start < end:
+        next_start = today_start if now < today_start else today_start + timedelta(days=1)
+        return max(0.0, (next_start - now).total_seconds())
+
+    # Cross-midnight window, e.g. 23:00-01:00. Outside means after end and before start.
+    next_start = today_start if now < today_start else today_start + timedelta(days=1)
+    return max(0.0, (next_start - now).total_seconds())
+
+
+def _bounded_jitter(
+    jitter_seconds: float,
+    random_fn: Callable[[float, float], float],
+) -> float:
+    if jitter_seconds <= 0:
+        return 0.0
+    return random_fn(-jitter_seconds, jitter_seconds)
