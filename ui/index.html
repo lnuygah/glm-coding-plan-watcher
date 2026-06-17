@@ -13,10 +13,16 @@
           <h1>GLM Plan Watcher</h1>
           <p>后台低频监控；登录和付款由可见浏览器交给用户人工完成。</p>
         </div>
-        <label>
-          Daemon
-          <input id="daemon-url" value="http://127.0.0.1:8765" />
-        </label>
+        <div class="connection">
+          <label>
+            Daemon
+            <input id="daemon-url" value="http://127.0.0.1:8765" />
+          </label>
+          <label>
+            Token
+            <input id="daemon-token" type="password" autocomplete="off" />
+          </label>
+        </div>
       </section>
 
       <section class="notice">

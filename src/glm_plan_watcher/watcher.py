@@ -7,6 +7,7 @@ import logging
 import random
 import signal
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, TextIO
@@ -17,6 +18,7 @@ from glm_plan_watcher.detector import DetectorStrategy, DomDetector
 from glm_plan_watcher.logging_setup import get_logger
 from glm_plan_watcher.models import CheckResult, TargetSpec, WatchEvent
 from glm_plan_watcher.notifier import NotificationArtifacts, Notifier
+from glm_plan_watcher.scheduler import SchedulerPolicy
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class AccountWatcher:
         notifier: Notifier | None = None,
         logger: logging.Logger | None = None,
         stdout: TextIO | None = None,
+        scheduler_policy: SchedulerPolicy | None = None,
     ) -> None:
         self.config = config
         self.detector = detector or DomDetector()
@@ -44,6 +47,10 @@ class AccountWatcher:
         self.logger = logger or get_logger("watcher")
         self.stdout = stdout or sys.stdout
         self.targets = config.target_specs
+        self.scheduler_policy = scheduler_policy or SchedulerPolicy(
+            base_interval_seconds=config.refresh_interval_seconds,
+            jitter_seconds=config.refresh_jitter_seconds,
+        )
         self._stop = asyncio.Event()
         self._last_state: dict[str, str] = {}
 
@@ -113,7 +120,8 @@ class AccountWatcher:
                 self._emit_heartbeat(check_index, action="none", message="max checks reached")
                 return 0
 
-            delay = self._next_delay_seconds()
+            results = [event.result for event in pending_events if event.result is not None]
+            delay = self._next_delay_seconds(results)
             next_refresh_at = datetime.now(UTC) + timedelta(seconds=delay)
             for event in pending_events:
                 self._emit_pending_event(event, action="wait", next_refresh_at=next_refresh_at)
@@ -281,7 +289,10 @@ class AccountWatcher:
             )
         )
 
-    def _next_delay_seconds(self) -> float:
+    def _next_delay_seconds(self, results: Sequence[CheckResult] = ()) -> float:
+        if self.scheduler_policy is not None:
+            return self.scheduler_policy.next_delay(results)
+
         interval = self.config.refresh_interval_seconds
         jitter = self.config.refresh_jitter_seconds
         if jitter <= 0:

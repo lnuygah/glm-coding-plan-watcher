@@ -12,22 +12,12 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from glm_plan_watcher.models import ButtonState, CheckResult, TargetSpec
 from glm_plan_watcher.selectors import (
-    AUTH_REQUIRED_KEYWORDS,
     AVAILABLE_KEYWORDS,
-    BILLING_CYCLE_LABELS,
-    CSS_BUY_BUTTON,
-    CSS_FALLBACK_BUTTON,
-    CSS_PACKAGE_CARD,
-    CSS_PACKAGE_CARD_BOX,
-    CSS_PACKAGE_LIST,
-    CSS_PACKAGE_TITLE,
-    CSS_SWITCH_TAB_ACTIVE_CLASS,
-    CSS_SWITCH_TAB_BOX,
-    CSS_SWITCH_TAB_ITEM,
     DISABLED_CLASS_TOKENS,
     SOLD_OUT_KEYWORDS,
     UNAVAILABLE_KEYWORDS,
 )
+from glm_plan_watcher.site_adapter import GlmSiteAdapter, SiteAdapter
 
 
 @dataclass(frozen=True)
@@ -93,12 +83,14 @@ def looks_like_auth_required(text: str) -> bool:
     登录过期。后续可用 `debug-selectors` 校准真实登录墙 DOM。
     """
 
-    normalized_text = " ".join(text.split())
-    return _contains_any(normalized_text, AUTH_REQUIRED_KEYWORDS)
+    return GlmSiteAdapter().looks_like_auth_required(text)
 
 
 class DomDetector(DetectorStrategy):
     """基于真实 DOM 的三段定位检测。"""
+
+    def __init__(self, adapter: SiteAdapter | None = None) -> None:
+        self.adapter = adapter or GlmSiteAdapter()
 
     async def detect(self, page: Page, target: TargetSpec) -> CheckResult:
         await self.wait_for_content(page)
@@ -145,7 +137,7 @@ class DomDetector(DetectorStrategy):
         """
 
         with suppress(PlaywrightTimeoutError):
-            await page.locator(CSS_PACKAGE_CARD_BOX).first.wait_for(
+            await page.locator(self.adapter.package_card_box_selector).first.wait_for(
                 state="visible", timeout=timeout_ms
             )
 
@@ -156,27 +148,27 @@ class DomDetector(DetectorStrategy):
         登录墙文案判断。该启发式只用于给 GUI/父进程提示重新登录，不做任何自动登录。
         """
 
-        card = page.locator(CSS_PACKAGE_CARD_BOX).first
+        card = page.locator(self.adapter.package_card_box_selector).first
         if await card.count() > 0:
             with suppress(PlaywrightTimeoutError):
                 if await card.is_visible(timeout=500):
                     return False
 
         text = await _safe_inner_text(page.locator("body"))
-        return looks_like_auth_required(text)
+        return self.adapter.looks_like_auth_required(text)
 
     async def ensure_billing_cycle(self, page: Page, target: TargetSpec) -> None:
         """切到目标计费周期；fixture 或页面缺 tab 时保持当前页面。"""
 
-        label = BILLING_CYCLE_LABELS[target.billing_cycle]
-        tab_box = page.locator(CSS_SWITCH_TAB_BOX)
+        label = self.adapter.billing_cycle_label(target.billing_cycle)
+        tab_box = page.locator(self.adapter.switch_tab_box_selector)
 
         if await tab_box.count() > 0:
-            tab = tab_box.locator(CSS_SWITCH_TAB_ITEM).filter(has_text=label).first
+            tab = tab_box.locator(self.adapter.switch_tab_item_selector).filter(has_text=label).first
             if await tab.count() == 0:
                 return
             class_name = await tab.get_attribute("class") or ""
-            if CSS_SWITCH_TAB_ACTIVE_CLASS not in class_name.split():
+            if self.adapter.switch_tab_active_class not in class_name.split():
                 await tab.click()
                 await _wait_for_tab_render(page)
             return
@@ -189,22 +181,20 @@ class DomDetector(DetectorStrategy):
     async def find_tier_card(self, page: Page, target: TargetSpec) -> Locator | None:
         """在套餐列表内按卡片标题精确定位目标卡。"""
 
-        package_list = page.locator(CSS_PACKAGE_LIST).first
+        package_list = page.locator(self.adapter.package_list_selector).first
         if await package_list.count() == 0:
             return None
 
-        cards = package_list.locator(CSS_PACKAGE_CARD_BOX)
+        cards = package_list.locator(self.adapter.package_card_box_selector)
         for index in range(await cards.count()):
             card = cards.nth(index)
-            title = card.locator(CSS_PACKAGE_TITLE).first
+            title = card.locator(self.adapter.package_title_selector).first
             if await title.count() == 0:
                 continue
             if (await _safe_inner_text(title)).strip() == target.tier.value:
                 return card
 
-        fallback = package_list.locator(
-            f"{CSS_PACKAGE_CARD}:has(.package-card-title:has-text('{target.tier.value}'))"
-        ).first
+        fallback = package_list.locator(self.adapter.tier_card_fallback_selector(target.tier.value)).first
         if await fallback.count() > 0:
             return fallback
         return None
@@ -212,11 +202,11 @@ class DomDetector(DetectorStrategy):
     async def find_entry_button(self, card: Locator) -> Locator | None:
         """在卡片作用域内定位购买/订阅入口按钮。"""
 
-        button = card.locator(CSS_BUY_BUTTON).first
+        button = card.locator(self.adapter.buy_button_selector).first
         if await button.count() > 0:
             return button
 
-        fallback = card.locator(CSS_FALLBACK_BUTTON).first
+        fallback = card.locator(self.adapter.fallback_button_selector).first
         if await fallback.count() > 0:
             return fallback
         return None
@@ -239,8 +229,8 @@ class DomDetector(DetectorStrategy):
 
         await self.wait_for_content(page)
         tabs: list[dict[str, str]] = []
-        for index in range(await page.locator(CSS_SWITCH_TAB_ITEM).count()):
-            tab = page.locator(CSS_SWITCH_TAB_ITEM).nth(index)
+        for index in range(await page.locator(self.adapter.switch_tab_item_selector).count()):
+            tab = page.locator(self.adapter.switch_tab_item_selector).nth(index)
             tabs.append(
                 {
                     "text": await _safe_inner_text(tab),
@@ -249,9 +239,9 @@ class DomDetector(DetectorStrategy):
             )
 
         cards: list[dict[str, str]] = []
-        for index in range(await page.locator(CSS_PACKAGE_CARD_BOX).count()):
-            card = page.locator(CSS_PACKAGE_CARD_BOX).nth(index)
-            title = card.locator(CSS_PACKAGE_TITLE).first
+        for index in range(await page.locator(self.adapter.package_card_box_selector).count()):
+            card = page.locator(self.adapter.package_card_box_selector).nth(index)
+            title = card.locator(self.adapter.package_title_selector).first
             button = await self.find_entry_button(card)
             attrs = await _collect_button_attrs(button) if button is not None else {}
             cards.append(

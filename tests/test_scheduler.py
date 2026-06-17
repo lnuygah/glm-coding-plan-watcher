@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from glm_plan_watcher.models import BillingCycle, ButtonState, CheckResult, TargetSpec, Tier
+from glm_plan_watcher.scheduler import MIN_INTERVAL_SECONDS, SchedulerPolicy, parse_restock_datetime
+
+TARGET = TargetSpec(billing_cycle=BillingCycle.monthly, tier=Tier.Pro)
+
+
+def result(text: str, state: ButtonState = ButtonState.sold_out) -> CheckResult:
+    return CheckResult(target=TARGET, state=state, button_text=text)
+
+
+def test_parse_restock_datetime() -> None:
+    now = datetime(2026, 6, 17, 12, 0, tzinfo=UTC)
+
+    parsed = parse_restock_datetime("暂时售罄 ｜06月18日 10:00 补货", now=now)
+
+    assert parsed == datetime(2026, 6, 18, 10, 0, tzinfo=UTC)
+
+
+def test_parse_restock_datetime_invalid_text_returns_none() -> None:
+    now = datetime(2026, 6, 17, 12, 0, tzinfo=UTC)
+
+    assert parse_restock_datetime("暂时售罄，稍后再来", now=now) is None
+
+
+def test_parse_restock_datetime_cross_year() -> None:
+    now = datetime(2026, 12, 31, 20, 0, tzinfo=UTC)
+
+    parsed = parse_restock_datetime("01月01日 10:00 补货", now=now)
+
+    assert parsed == datetime(2027, 1, 1, 10, 0, tzinfo=UTC)
+
+
+def test_scheduler_near_hint_clamps_to_minimum() -> None:
+    now = datetime(2026, 6, 18, 9, 55, tzinfo=UTC)
+    policy = SchedulerPolicy(
+        base_interval_seconds=90,
+        jitter_seconds=10,
+        now_fn=lambda: now,
+        random_fn=lambda _low, _high: -10,
+    )
+
+    assert policy.next_delay([result("06月18日 10:00 补货")]) == MIN_INTERVAL_SECONDS
+
+
+def test_scheduler_far_hint_relaxes_but_keeps_jitter() -> None:
+    now = datetime(2026, 6, 17, 10, 0, tzinfo=UTC)
+    policy = SchedulerPolicy(
+        base_interval_seconds=90,
+        jitter_seconds=5,
+        now_fn=lambda: now,
+        random_fn=lambda _low, _high: 5,
+    )
+
+    assert policy.next_delay([result("06月19日 10:00 补货")]) == 3605
+
+
+def test_scheduler_mid_hint_does_not_poll_below_minimum() -> None:
+    now = datetime(2026, 6, 18, 8, 0, tzinfo=UTC)
+    policy = SchedulerPolicy(
+        base_interval_seconds=10,
+        jitter_seconds=0,
+        now_fn=lambda: now,
+    )
+
+    assert policy.next_delay([result("06月18日 10:00 补货")]) == MIN_INTERVAL_SECONDS
+
+
+def test_scheduler_no_hint_falls_back_to_interval_with_jitter() -> None:
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=15,
+        random_fn=lambda _low, _high: -5,
+    )
+
+    assert policy.next_delay([result("已售罄，暂无时间")]) == 115
+
+
+def test_scheduler_ignores_non_sold_out_hints() -> None:
+    policy = SchedulerPolicy(
+        base_interval_seconds=120,
+        jitter_seconds=0,
+    )
+
+    assert policy.next_delay([result("06月18日 10:00 补货", ButtonState.disabled)]) == 120

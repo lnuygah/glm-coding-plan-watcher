@@ -30,25 +30,30 @@ For sidecar packaging:
 Run the daemon directly during backend development:
 
 ```bash
-.venv/bin/glm-plan serve --host 127.0.0.1 --port 8765 --db daemon.sqlite3
+.venv/bin/glm-plan serve \
+  --host 127.0.0.1 \
+  --port 0 \
+  --db daemon.sqlite3 \
+  --handshake daemon.handshake.json
 ```
 
-The daemon only binds to localhost by default. The Tauri UI expects `http://127.0.0.1:8765`
-unless the user changes the Daemon field.
+The daemon only binds to localhost by default. `--port 0` asks the OS for a free port and writes
+`{"host", "port", "token"}` to the handshake file. If `--token` or
+`GLM_WATCHER_DAEMON_TOKEN` is absent, the daemon generates a per-launch bearer token. Only `/health`
+is unauthenticated; all REST calls and `/ws/events` require the token.
 
 ## Tauri Dev
 
 The Tauri shell starts the daemon automatically with:
 
 ```text
-glm-plan serve --host 127.0.0.1 --port 8765 --db <app-data>/daemon.sqlite3
+glm-plan serve --host 127.0.0.1 --port 0 --db <app-data>/daemon.sqlite3 --token <uuid> --handshake <app-data>/daemon.handshake.json
 ```
 
 Make sure `.venv/bin` is on `PATH`, or provide an explicit binary:
 
 ```bash
 export GLM_WATCHER_DAEMON_BIN="$(pwd)/.venv/bin/glm-plan"
-export GLM_WATCHER_DAEMON_PORT=8765
 npm install
 npm run tauri:dev
 ```
@@ -90,7 +95,8 @@ npm run tauri:build
 ## Runtime Model
 
 - The Tauri process starts/stops the local daemon.
-- The UI communicates with daemon REST and `/ws/events`.
+- The UI reads the local handshake file through a Tauri command, then communicates with daemon REST
+  using `Authorization: Bearer <token>` and `/ws/events?token=<token>`.
 - Login and payment handoff always stop the headless worker first, then launch a headful session
   using the same `user_data_dir`.
 - Payment handoff never confirms payment, solves verification, or bypasses risk checks.
@@ -101,6 +107,8 @@ Do not commit generated outputs:
 
 - `node_modules/`
 - `src-tauri/target/`
+- `daemon.handshake.json`
+- `*.handshake.json`
 - `sidecar/build/`
 - `sidecar/dist/`
 - PyInstaller `build/` and `dist/`

@@ -1,25 +1,32 @@
 use std::{
     env,
+    fs,
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::Mutex,
 };
 
+use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Manager,
+    State,
 };
+use uuid::Uuid;
 
 struct DaemonState {
     child: Mutex<Option<Child>>,
+    handshake_path: Mutex<Option<PathBuf>>,
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(DaemonState {
             child: Mutex::new(None),
+            handshake_path: Mutex::new(None),
         })
+        .invoke_handler(tauri::generate_handler![daemon_handshake])
         .setup(|app| {
             start_daemon(app)?;
             create_tray(app)?;
@@ -35,12 +42,46 @@ fn main() {
         .expect("failed to run GLM Plan Watcher shell");
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DaemonHandshake {
+    host: String,
+    port: u16,
+    token: String,
+}
+
+#[tauri::command]
+fn daemon_handshake(state: State<'_, DaemonState>) -> Result<Option<DaemonHandshake>, String> {
+    let path = {
+        let guard = state
+            .handshake_path
+            .lock()
+            .map_err(|_| "daemon state poisoned".to_string())?;
+        guard.clone()
+    };
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    match serde_json::from_str::<DaemonHandshake>(&text) {
+        Ok(handshake) => Ok(Some(handshake)),
+        Err(_) => Ok(None),
+    }
+}
+
 fn start_daemon(app: &tauri::App) -> tauri::Result<()> {
-    let port = env::var("GLM_WATCHER_DAEMON_PORT").unwrap_or_else(|_| "8765".to_string());
+    let port = env::var("GLM_WATCHER_DAEMON_PORT").unwrap_or_else(|_| "0".to_string());
     let daemon_bin = resolve_daemon_bin(app);
     let data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
     let db_path = data_dir.join("daemon.sqlite3");
+    let handshake_path = env::var("GLM_WATCHER_DAEMON_HANDSHAKE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| data_dir.join("daemon.handshake.json"));
+    let token = env::var("GLM_WATCHER_DAEMON_TOKEN").unwrap_or_else(|_| Uuid::new_v4().to_string());
+    let _ = fs::remove_file(&handshake_path);
 
     let mut command = Command::new(daemon_bin);
     command
@@ -51,12 +92,17 @@ fn start_daemon(app: &tauri::App) -> tauri::Result<()> {
         .arg(&port)
         .arg("--db")
         .arg(db_path)
+        .arg("--token")
+        .arg(token)
+        .arg("--handshake")
+        .arg(&handshake_path)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
     let child = command.spawn()?;
     if let Some(state) = app.try_state::<DaemonState>() {
         *state.child.lock().expect("daemon state poisoned") = Some(child);
+        *state.handshake_path.lock().expect("daemon state poisoned") = Some(handshake_path);
     }
     Ok(())
 }
@@ -124,6 +170,9 @@ fn stop_daemon(app: &tauri::AppHandle) {
         if let Some(mut child) = state.child.lock().expect("daemon state poisoned").take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+        if let Some(path) = state.handshake_path.lock().expect("daemon state poisoned").take() {
+            let _ = fs::remove_file(path);
         }
     }
 }
