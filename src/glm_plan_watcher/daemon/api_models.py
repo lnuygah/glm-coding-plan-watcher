@@ -45,3 +45,13 @@ class ServeOptions(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8765
     db_path: Path = Path("daemon.sqlite3")
+
+
+class LoginRequest(BaseModel):
+    restore_worker: bool = False
+
+
+class HandoffRequest(BaseModel):
+    target_id: int | None = None
+    click_entry: bool = False
+    restore_worker: bool = False

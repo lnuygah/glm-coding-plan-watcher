@@ -14,6 +14,8 @@ class FakeSupervisor:
     def __init__(self) -> None:
         self.started: list[int] = []
         self.stopped: list[int] = []
+        self.logins: list[tuple[int, bool]] = []
+        self.handoffs: list[tuple[int, int | None, bool, bool]] = []
 
     async def start_worker(self, account_id: int) -> dict[str, object]:
         self.started.append(account_id)
@@ -28,6 +30,30 @@ class FakeSupervisor:
 
     def list_workers(self) -> list[dict[str, object]]:
         return []
+
+    async def start_login_session(
+        self,
+        account_id: int,
+        restore_worker: bool = False,
+    ) -> dict[str, object]:
+        self.logins.append((account_id, restore_worker))
+        return {"account_id": account_id, "status": "login", "pid": 456}
+
+    async def start_handoff_session(
+        self,
+        account_id: int,
+        target_id: int | None = None,
+        click_entry: bool = False,
+        restore_worker: bool = False,
+    ) -> dict[str, object]:
+        self.handoffs.append((account_id, target_id, click_entry, restore_worker))
+        return {
+            "account_id": account_id,
+            "status": "handoff",
+            "pid": 789,
+            "target_id": target_id,
+            "click_entry": click_entry,
+        }
 
 
 def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
@@ -60,5 +86,15 @@ def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
     assert client.get("/events", params={"account_id": account["id"]}).json()[0]["message"] == "sold out"
     assert client.post(f"/accounts/{account['id']}/worker/start").json()["status"] == "running"
     assert client.post(f"/accounts/{account['id']}/worker/stop").json()["status"] == "stopped"
+    assert client.post(f"/accounts/{account['id']}/login", json={}).json()["status"] == "login"
+    assert (
+        client.post(
+            f"/accounts/{account['id']}/handoff",
+            json={"target_id": target["id"], "click_entry": False},
+        ).json()["status"]
+        == "handoff"
+    )
     assert supervisor.started == [account["id"]]
     assert supervisor.stopped == [account["id"]]
+    assert supervisor.logins == [(account["id"], False)]
+    assert supervisor.handoffs == [(account["id"], target["id"], False, False)]

@@ -10,11 +10,17 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from glm_plan_watcher.daemon.api_models import (
     AccountCreate,
     AccountUpdate,
+    HandoffRequest,
+    LoginRequest,
     TargetCreate,
     TargetUpdate,
 )
 from glm_plan_watcher.daemon.ingest import EventBroadcaster
-from glm_plan_watcher.daemon.supervisor import WorkerAlreadyRunningError, WorkerSupervisor
+from glm_plan_watcher.daemon.supervisor import (
+    ProfileInUseError,
+    WorkerAlreadyRunningError,
+    WorkerSupervisor,
+)
 from glm_plan_watcher.db import Repository
 
 
@@ -137,6 +143,34 @@ def create_app(
     @app.post("/accounts/{account_id}/worker/stop")
     async def stop_worker(account_id: int) -> dict[str, object]:
         return await workers.stop_worker(account_id)
+
+    @app.post("/accounts/{account_id}/login")
+    async def login(account_id: int, payload: LoginRequest | None = None) -> dict[str, object]:
+        try:
+            request = payload or LoginRequest()
+            return await workers.start_login_session(
+                account_id,
+                restore_worker=request.restore_worker,
+            )
+        except ProfileInUseError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/accounts/{account_id}/handoff")
+    async def handoff(account_id: int, payload: HandoffRequest | None = None) -> dict[str, object]:
+        try:
+            request = payload or HandoffRequest()
+            return await workers.start_handoff_session(
+                account_id,
+                target_id=request.target_id,
+                click_entry=request.click_entry,
+                restore_worker=request.restore_worker,
+            )
+        except ProfileInUseError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.websocket("/ws/events")
     async def websocket_events(websocket: WebSocket, account_id: int | None = None) -> None:

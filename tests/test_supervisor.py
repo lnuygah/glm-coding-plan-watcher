@@ -8,7 +8,11 @@ import pytest
 import yaml
 
 from glm_plan_watcher.daemon.ingest import EventBroadcaster
-from glm_plan_watcher.daemon.supervisor import WorkerAlreadyRunningError, WorkerSupervisor
+from glm_plan_watcher.daemon.supervisor import (
+    ProfileInUseError,
+    WorkerAlreadyRunningError,
+    WorkerSupervisor,
+)
 from glm_plan_watcher.db import Repository
 
 
@@ -116,3 +120,88 @@ def test_supervisor_compute_backoff_caps(tmp_path: Path) -> None:
 
     assert supervisor.compute_backoff(0) == 1.0
     assert supervisor.compute_backoff(10) == 60.0
+
+
+@pytest.mark.asyncio
+async def test_login_stops_headless_worker_before_headful_session(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    headless_factory = FakeProcessFactory()
+    headful_factory = FakeProcessFactory()
+    broadcaster = EventBroadcaster()
+    supervisor = WorkerSupervisor(
+        repo,
+        broadcaster,
+        process_factory=headless_factory,
+        headful_launcher=headful_factory,
+    )
+
+    await supervisor.start_worker(account_id)
+    async with broadcaster.subscribe(account_id=account_id) as queue:
+        result = await supervisor.start_login_session(account_id)
+        message = await queue.get()
+
+    assert headless_factory.processes[0].returncode == 0
+    assert result["status"] == "login"
+    assert headful_factory.commands[0][1:4] == ["-m", "glm_plan_watcher.headful", "login"]
+    assert message["event"]["type"] == "login"
+    assert repo.list_events(account_id=account_id)[0]["type"] == "login"
+
+    headful_factory.processes[0].finish(0)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_handoff_stops_worker_and_does_not_click_by_default(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    headless_factory = FakeProcessFactory()
+    headful_factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(
+        repo,
+        EventBroadcaster(),
+        process_factory=headless_factory,
+        headful_launcher=headful_factory,
+    )
+
+    await supervisor.start_worker(account_id)
+    result = await supervisor.start_handoff_session(account_id)
+
+    assert headless_factory.processes[0].returncode == 0
+    assert result["status"] == "handoff"
+    assert result["click_entry"] is False
+    assert "--click-entry" not in headful_factory.commands[0]
+    assert repo.list_events(account_id=account_id)[0]["type"] == "handoff"
+
+    headful_factory.processes[0].finish(0)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_handoff_can_request_entry_click_without_payment_automation(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    headful_factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(repo, EventBroadcaster(), headful_launcher=headful_factory)
+
+    await supervisor.start_handoff_session(account_id, click_entry=True)
+
+    assert "--click-entry" in headful_factory.commands[0]
+
+    headful_factory.processes[0].finish(0)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_profile_mutex_blocks_worker_start_during_headful_session(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    headful_factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(repo, EventBroadcaster(), headful_launcher=headful_factory)
+
+    await supervisor.start_login_session(account_id)
+    with pytest.raises(ProfileInUseError):
+        await supervisor.start_worker(account_id)
+
+    headful_factory.processes[0].finish(0)
+    await asyncio.sleep(0)
