@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default local window capability. The UI only talks to the localhost daemon.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

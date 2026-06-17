@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GLM Plan Watcher</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="toolbar">
+        <div>
+          <h1>GLM Plan Watcher</h1>
+          <p>后台低频监控；登录和付款由可见浏览器交给用户人工完成。</p>
+        </div>
+        <label>
+          Daemon
+          <input id="daemon-url" value="http://127.0.0.1:8765" />
+        </label>
+      </section>
+
+      <section class="notice">
+        不保存账号密码，不处理验证码/风控，不自动付款。Handoff 只打开可见浏览器；是否点击购买入口由用户显式选择，后续支付必须人工确认。
+      </section>
+
+      <section class="grid">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Accounts</h2>
+            <button id="refresh">Refresh</button>
+          </div>
+          <form id="account-form" class="form-row">
+            <input name="display_name" placeholder="Account name" required />
+            <input name="user_data_dir" placeholder="user_data/account-name" required />
+            <button type="submit">Add</button>
+          </form>
+          <div id="accounts" class="list"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Events</h2>
+          <div id="events" class="events"></div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
