@@ -9,13 +9,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class BillingCycle(str, Enum):
+class BillingCycle(StrEnum):
     """计费周期。值与页面中文标签一一对应。"""
 
     monthly = "monthly"
@@ -32,7 +32,7 @@ class BillingCycle(str, Enum):
         }[self]
 
 
-class Tier(str, Enum):
+class Tier(StrEnum):
     """套餐档位。值与页面卡片标题一致（大小写敏感）。"""
 
     Lite = "Lite"
@@ -40,7 +40,7 @@ class Tier(str, Enum):
     Max = "Max"
 
 
-class ButtonState(str, Enum):
+class ButtonState(StrEnum):
     """购买按钮状态判定。"""
 
     available = "available"  # 可购买/可订阅
@@ -73,7 +73,7 @@ class CheckResult(BaseModel):
     reason: str = ""  # 判定依据，便于排障
     # 原始属性快照（disabled/aria-disabled/class/visible 等），用于调试与校准
     attrs: dict[str, str] = Field(default_factory=dict)
-    checked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def available(self) -> bool:
@@ -95,7 +95,7 @@ class WatchEvent(BaseModel):
     available: bool = False
     next_refresh_at: datetime | None = None
     message: str = ""
-    ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def to_json_line(self) -> str:
         """序列化为一行 JSON（不含换行）。"""

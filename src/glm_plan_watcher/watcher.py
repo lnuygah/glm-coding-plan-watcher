@@ -7,7 +7,7 @@ import logging
 import random
 import signal
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TextIO
 
 from glm_plan_watcher.browser import BrowserSession, make_storage
@@ -61,7 +61,7 @@ class Watcher:
                         return 0
 
                     delay = self._next_delay_seconds()
-                    next_refresh_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+                    next_refresh_at = datetime.now(UTC) + timedelta(seconds=delay)
                     self._emit_event(
                         result,
                         check_index,
@@ -82,7 +82,7 @@ class Watcher:
                     self.logger.exception("检测循环异常：%s", exc)
                     await session.capture_artifacts("error", self.config.target)
                     delay = self._next_delay_seconds()
-                    next_refresh_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+                    next_refresh_at = datetime.now(UTC) + timedelta(seconds=delay)
                     self._emit_raw_event(
                         WatchEvent(
                             type="error",

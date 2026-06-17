@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Mapping
 
-from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Locator, Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from glm_plan_watcher.models import ButtonState, CheckResult, TargetSpec
 from glm_plan_watcher.selectors import (
@@ -122,7 +124,7 @@ class DomDetector(DetectorStrategy):
         tab_box = page.locator(CSS_SWITCH_TAB_BOX)
 
         if await tab_box.count() > 0:
-            tab = tab_box.locator(CSS_SWITCH_TAB_ITEM).filter(has_text=label).first()
+            tab = tab_box.locator(CSS_SWITCH_TAB_ITEM).filter(has_text=label).first
             if await tab.count() == 0:
                 return
             class_name = await tab.get_attribute("class") or ""
@@ -131,7 +133,7 @@ class DomDetector(DetectorStrategy):
                 await _wait_for_tab_render(page)
             return
 
-        fallback = page.get_by_text(label, exact=True).first()
+        fallback = page.get_by_text(label, exact=True).first
         if await fallback.count() > 0:
             await fallback.click()
             await _wait_for_tab_render(page)
@@ -139,14 +141,14 @@ class DomDetector(DetectorStrategy):
     async def find_tier_card(self, page: Page, target: TargetSpec) -> Locator | None:
         """在套餐列表内按卡片标题精确定位目标卡。"""
 
-        package_list = page.locator(CSS_PACKAGE_LIST).first()
+        package_list = page.locator(CSS_PACKAGE_LIST).first
         if await package_list.count() == 0:
             return None
 
         cards = package_list.locator(CSS_PACKAGE_CARD_BOX)
         for index in range(await cards.count()):
             card = cards.nth(index)
-            title = card.locator(CSS_PACKAGE_TITLE).first()
+            title = card.locator(CSS_PACKAGE_TITLE).first
             if await title.count() == 0:
                 continue
             if (await _safe_inner_text(title)).strip() == target.tier.value:
@@ -154,7 +156,7 @@ class DomDetector(DetectorStrategy):
 
         fallback = package_list.locator(
             f"{CSS_PACKAGE_CARD}:has(.package-card-title:has-text('{target.tier.value}'))"
-        ).first()
+        ).first
         if await fallback.count() > 0:
             return fallback
         return None
@@ -162,11 +164,11 @@ class DomDetector(DetectorStrategy):
     async def find_entry_button(self, card: Locator) -> Locator | None:
         """在卡片作用域内定位购买/订阅入口按钮。"""
 
-        button = card.locator(CSS_BUY_BUTTON).first()
+        button = card.locator(CSS_BUY_BUTTON).first
         if await button.count() > 0:
             return button
 
-        fallback = card.locator(CSS_FALLBACK_BUTTON).first()
+        fallback = card.locator(CSS_FALLBACK_BUTTON).first
         if await fallback.count() > 0:
             return fallback
         return None
@@ -200,7 +202,7 @@ class DomDetector(DetectorStrategy):
         cards: list[dict[str, str]] = []
         for index in range(await page.locator(CSS_PACKAGE_CARD_BOX).count()):
             card = page.locator(CSS_PACKAGE_CARD_BOX).nth(index)
-            title = card.locator(CSS_PACKAGE_TITLE).first()
+            title = card.locator(CSS_PACKAGE_TITLE).first
             button = await self.find_entry_button(card)
             attrs = await _collect_button_attrs(button) if button is not None else {}
             cards.append(
@@ -256,8 +258,6 @@ async def _safe_inner_text(locator: Locator | None) -> str:
 
 
 async def _wait_for_tab_render(page: Page) -> None:
-    try:
+    with suppress(PlaywrightTimeoutError):
         await page.wait_for_load_state("networkidle", timeout=5_000)
-    except PlaywrightTimeoutError:
-        pass
     await page.wait_for_timeout(500)

@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from playwright.async_api import Page, async_playwright
 
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 

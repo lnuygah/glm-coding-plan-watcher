@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from glm_plan_watcher.exceptions import ConfigError
-from glm_plan_watcher.models import BillingCycle, Tier, TargetSpec
+from glm_plan_watcher.models import BillingCycle, TargetSpec, Tier
 
 DEFAULT_URL = "https://www.bigmodel.cn/glm-coding"
 
