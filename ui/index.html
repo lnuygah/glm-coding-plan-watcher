@@ -11,21 +11,31 @@
       <section class="toolbar">
         <div>
           <h1>GLM Plan Watcher</h1>
-          <p>后台 headless 监控；登录和命中付款衔接才打开可见浏览器。</p>
+          <p data-i18n="appSubtitle">后台 headless 监控；登录和命中付款衔接才打开可见浏览器。</p>
         </div>
         <div class="connection">
           <label>
-            Daemon
-            <input id="daemon-url" value="http://127.0.0.1:8765" />
+            <span data-i18n="languageLabel">Language</span>
+            <select id="language-select">
+              <option value="zh-CN">简体中文</option>
+              <option value="en">English</option>
+            </select>
           </label>
-          <label>
-            Token
-            <input id="daemon-token" type="password" autocomplete="off" />
-          </label>
+          <details class="advanced">
+            <summary data-i18n="advancedLabel">高级/诊断</summary>
+            <label>
+              <span data-i18n="daemonLabel">Daemon</span>
+              <input id="daemon-url" value="http://127.0.0.1:8765" />
+            </label>
+            <label>
+              <span data-i18n="tokenLabel">Token</span>
+              <input id="daemon-token" type="password" autocomplete="off" />
+            </label>
+          </details>
         </div>
       </section>
 
-      <section class="notice">
+      <section class="notice" data-i18n="notice">
         可为每个 target 配置开售窗口与快刷间隔。过低间隔可能触发限流/风控，反而买不到；Handoff 只打开可见浏览器并可点击一次购买入口，后续支付必须人工确认。
       </section>
 
@@ -34,19 +44,28 @@
       <section class="grid">
         <div class="panel">
           <div class="panel-header">
-            <h2>Accounts</h2>
-            <button id="refresh">Refresh</button>
+            <h2 data-i18n="accountsTitle">Accounts</h2>
+            <button id="refresh" data-i18n="refreshButton">Refresh</button>
           </div>
           <form id="account-form" class="form-row">
-            <input name="display_name" placeholder="Account name" required />
-            <input name="user_data_dir" placeholder="user_data/account-name" required />
-            <button type="submit">Add</button>
+            <input
+              name="display_name"
+              placeholder="Account name"
+              data-i18n-placeholder="accountNamePlaceholder"
+              required
+            />
+            <input
+              name="user_data_dir"
+              placeholder="可选：留空自动管理（导入已有 profile 请填绝对路径）"
+              data-i18n-placeholder="profilePlaceholder"
+            />
+            <button type="submit" data-i18n="addAccountButton">Add</button>
           </form>
           <div id="accounts" class="list"></div>
         </div>
 
         <div class="panel">
-          <h2>Events</h2>
+          <h2 data-i18n="eventsTitle">Events</h2>
           <div id="events" class="events"></div>
         </div>
       </section>

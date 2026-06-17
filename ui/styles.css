@@ -56,6 +56,22 @@ p {
   min-width: 300px;
 }
 
+.connection .advanced {
+  font-size: 13px;
+  color: #555;
+}
+
+.connection .advanced summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.connection .advanced label {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 .notice {
   background: #fff8e5;
   border: 1px solid #efd48c;

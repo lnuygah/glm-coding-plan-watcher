@@ -5,15 +5,204 @@ const eventsEl = document.querySelector("#events");
 const refreshButton = document.querySelector("#refresh");
 const accountForm = document.querySelector("#account-form");
 const statusEl = document.querySelector("#status");
+const languageSelect = document.querySelector("#language-select");
 
-const billingLabels = {
+const LANGUAGE_STORAGE_KEY = "glm-plan-watcher-language";
+
+const translations = {
+  "zh-CN": {
+    documentTitle: "GLM Plan Watcher",
+    appSubtitle: "后台 headless 监控；登录和命中付款衔接才打开可见浏览器。",
+    daemonLabel: "Daemon",
+    tokenLabel: "Token",
+    languageLabel: "语言",
+    notice:
+      "可为每个 target 配置开售窗口与快刷间隔。过低间隔可能触发限流/风控，反而买不到；Handoff 只打开可见浏览器并可点击一次购买入口，后续支付必须人工确认。",
+    accountsTitle: "账号",
+    eventsTitle: "事件",
+    refreshButton: "刷新",
+    accountNamePlaceholder: "账号名称",
+    profilePlaceholder: "可选：留空自动管理，或填绝对路径导入已有 profile",
+    advancedLabel: "高级/诊断",
+    addAccountButton: "添加",
+    noTargets: "暂无 targets",
+    addMonitorTask: "添加监控任务",
+    addTargetButton: "添加 target",
+    startButton: "启动",
+    stopButton: "停止",
+    loginButton: "登录",
+    handoffButton: "付款衔接",
+    saveButton: "保存",
+    deleteButton: "删除",
+    enabledStatus: "启用",
+    disabledStatus: "停用",
+    billingLabel: "计费周期",
+    tierLabel: "套餐",
+    baseIntervalLabel: "基础间隔",
+    baseJitterLabel: "基础抖动",
+    windowStartLabel: "开售窗口开始",
+    windowEndLabel: "开售窗口结束",
+    timezoneLabel: "时区",
+    activeIntervalLabel: "窗口内间隔",
+    activeJitterLabel: "窗口内抖动",
+    idleIntervalLabel: "窗口外间隔",
+    timezonePlaceholder: "本机时区或 Asia/Shanghai",
+    enabledLabel: "启用",
+    dryRunLabel: "Dry run 安全模式",
+    clickEntryLabel: "handoff 时点击入口",
+    openHandoffLabel: "命中后打开 handoff",
+    failedToFetch:
+      "Failed to fetch. 请检查 daemon URL/token、CORS，以及 127.0.0.1/localhost 是否绕过本机代理。",
+    addTargetFailed: "添加 target 失败",
+    actionFailed: "{action} 失败",
+    saveTargetFailed: "保存 target 失败",
+    handoffFailed: "Handoff 失败",
+    deleteTargetFailed: "删除 target 失败",
+    connectEventsFailed: "连接事件流失败",
+    webSocketFailed: "WebSocket 连接失败。请检查 daemon URL/token 和本机代理绕过。",
+    webSocketClosed: "WebSocket 已关闭：code={code}",
+    reloadAccountsFailed: "重新加载账号失败",
+    tauriUnavailable: "Tauri bridge 不可用；请手动填写 Daemon 和 Token。",
+    handshakeMissing: "未找到 daemon handshake。请检查 Tauri sidecar daemon 是否启动。",
+    eventActionFailed: "{action} 失败",
+    addAccountFailed: "添加账号失败",
+    refreshFailed: "刷新失败",
+    loadAccountsFailed: "加载账号失败",
+  },
+  en: {
+    documentTitle: "GLM Plan Watcher",
+    appSubtitle: "Headless background monitoring; visible browser opens only for login and payment handoff.",
+    daemonLabel: "Daemon",
+    tokenLabel: "Token",
+    languageLabel: "Language",
+    notice:
+      "Configure sale windows and fast refresh per target. Too-low intervals can trigger rate limits or risk checks and reduce your chance of purchase. Handoff only opens a visible browser and may click the purchase entry once; final payment must be manual.",
+    accountsTitle: "Accounts",
+    eventsTitle: "Events",
+    refreshButton: "Refresh",
+    accountNamePlaceholder: "Account name",
+    profilePlaceholder: "Optional: leave blank to auto-manage, or enter an absolute path to import an existing profile",
+    advancedLabel: "Advanced / diagnostics",
+    addAccountButton: "Add",
+    noTargets: "No targets",
+    addMonitorTask: "Add monitor task",
+    addTargetButton: "Add target",
+    startButton: "Start",
+    stopButton: "Stop",
+    loginButton: "Login",
+    handoffButton: "Handoff",
+    saveButton: "Save",
+    deleteButton: "Delete",
+    enabledStatus: "enabled",
+    disabledStatus: "disabled",
+    billingLabel: "Billing",
+    tierLabel: "Tier",
+    baseIntervalLabel: "Base interval",
+    baseJitterLabel: "Base jitter",
+    windowStartLabel: "Window start",
+    windowEndLabel: "Window end",
+    timezoneLabel: "Timezone",
+    activeIntervalLabel: "Active interval",
+    activeJitterLabel: "Active jitter",
+    idleIntervalLabel: "Idle interval",
+    timezonePlaceholder: "local or Asia/Shanghai",
+    enabledLabel: "Enabled",
+    dryRunLabel: "Dry run",
+    clickEntryLabel: "Click entry in handoff",
+    openHandoffLabel: "Open handoff on hit",
+    failedToFetch:
+      "Failed to fetch. Check daemon URL/token, CORS, and local proxy bypass for 127.0.0.1/localhost.",
+    addTargetFailed: "Add target failed",
+    actionFailed: "{action} failed",
+    saveTargetFailed: "Save target failed",
+    handoffFailed: "Handoff failed",
+    deleteTargetFailed: "Delete target failed",
+    connectEventsFailed: "Connect events failed",
+    webSocketFailed: "WebSocket connection failed. Check daemon URL/token and local proxy bypass.",
+    webSocketClosed: "WebSocket closed: code={code}",
+    reloadAccountsFailed: "Reload accounts failed",
+    tauriUnavailable: "Tauri bridge is unavailable; fill Daemon and Token manually.",
+    handshakeMissing: "Daemon handshake was not found. Check that the Tauri sidecar daemon started.",
+    eventActionFailed: "{action} failed",
+    addAccountFailed: "Add account failed",
+    refreshFailed: "Refresh failed",
+    loadAccountsFailed: "Load accounts failed",
+  },
+};
+
+const billingEventLabels = {
   monthly: "连续包月",
   quarterly: "连续包季",
   yearly: "连续包年",
 };
 
+const billingDisplayLabels = {
+  "zh-CN": billingEventLabels,
+  en: {
+    monthly: "monthly",
+    quarterly: "quarterly",
+    yearly: "yearly",
+  },
+};
+
+const accountStatusLabels = {
+  "zh-CN": {
+    running: "运行中",
+    stopped: "已停止",
+    login: "登录中",
+    handoff: "付款衔接",
+    crashed: "已崩溃",
+    exited: "已退出",
+  },
+  en: {
+    running: "running",
+    stopped: "stopped",
+    login: "login",
+    handoff: "handoff",
+    crashed: "crashed",
+    exited: "exited",
+  },
+};
+
+const actionKeys = {
+  start: "startButton",
+  stop: "stopButton",
+  login: "loginButton",
+  handoff: "handoffButton",
+};
+
 let ws = null;
 const accountTargets = new Map();
+let currentLanguage = detectLanguage();
+
+function detectLanguage() {
+  const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  if (stored && translations[stored]) {
+    return stored;
+  }
+  return navigator.language?.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+}
+
+function t(key, params = {}) {
+  const template = translations[currentLanguage]?.[key] ?? translations.en[key] ?? key;
+  return template.replace(/\{(?<name>\w+)\}/g, (_match, name) => params[name] ?? "");
+}
+
+function applyI18n() {
+  document.documentElement.lang = currentLanguage;
+  document.title = t("documentTitle");
+  languageSelect.value = currentLanguage;
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    element.textContent = t(element.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+    element.placeholder = t(element.dataset.i18nPlaceholder);
+  });
+}
+
+function actionText(action) {
+  return t(actionKeys[action] || action);
+}
 
 function daemonUrl() {
   return daemonUrlInput.value.replace(/\/$/, "");
@@ -55,7 +244,7 @@ function clearStatus() {
 
 function errorText(error) {
   if (error instanceof TypeError && error.message === "Failed to fetch") {
-    return "Failed to fetch. Check daemon URL/token, CORS, and local proxy bypass for 127.0.0.1/localhost.";
+    return t("failedToFetch");
   }
   return error?.message || String(error);
 }
@@ -90,27 +279,27 @@ function renderAccount(account, targets) {
         <strong>${escapeHtml(account.display_name)}</strong>
         <div class="profile">${escapeHtml(account.user_data_dir)}</div>
       </div>
-      <span>${escapeHtml(account.status || "stopped")}</span>
+      <span>${escapeHtml(accountStatusLabel(account.status || "stopped"))}</span>
     </div>
     <div class="actions">
-      <button data-action="start">Start</button>
-      <button data-action="stop">Stop</button>
-      <button data-action="login">Login</button>
-      <button data-action="handoff">Handoff</button>
+      <button data-action="start">${escapeHtml(t("startButton"))}</button>
+      <button data-action="stop">${escapeHtml(t("stopButton"))}</button>
+      <button data-action="login">${escapeHtml(t("loginButton"))}</button>
+      <button data-action="handoff">${escapeHtml(t("handoffButton"))}</button>
     </div>
     <div class="targets"></div>
     <details class="add-target" open>
-      <summary>Add monitor task</summary>
+      <summary>${escapeHtml(t("addMonitorTask"))}</summary>
       <form class="target-form">
         ${targetFormFields()}
-        <button type="submit">Add target</button>
+        <button type="submit">${escapeHtml(t("addTargetButton"))}</button>
       </form>
     </details>
   `;
 
   const targetsContainer = row.querySelector(".targets");
   if (targets.length === 0) {
-    targetsContainer.innerHTML = "<em>No targets</em>";
+    targetsContainer.innerHTML = `<em>${escapeHtml(t("noTargets"))}</em>`;
   } else {
     for (const target of targets) {
       targetsContainer.append(renderTarget(account, target));
@@ -119,7 +308,7 @@ function renderAccount(account, targets) {
 
   row.querySelector(".target-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await withUiError("Add target failed", async () => {
+    await withUiError(t("addTargetFailed"), async () => {
       await api(`/accounts/${account.id}/targets`, {
         method: "POST",
         body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
@@ -131,7 +320,7 @@ function renderAccount(account, targets) {
 
   row.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      await withUiError(`${button.dataset.action} failed`, async () => {
+      await withUiError(t("actionFailed", { action: actionText(button.dataset.action) }), async () => {
         const action = button.dataset.action;
         if (action === "start") await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
         if (action === "stop") await api(`/accounts/${account.id}/worker/stop`, { method: "POST" });
@@ -154,15 +343,15 @@ function renderTarget(account, target) {
   item.className = "target-card";
   item.innerHTML = `
     <div class="target-title">
-      <strong>${escapeHtml(target.billing_cycle)} / ${escapeHtml(target.tier)}</strong>
-      <span>${target.enabled ? "enabled" : "disabled"}</span>
+      <strong>${escapeHtml(billingDisplayLabel(target.billing_cycle))} / ${escapeHtml(target.tier)}</strong>
+      <span>${target.enabled ? escapeHtml(t("enabledStatus")) : escapeHtml(t("disabledStatus"))}</span>
     </div>
     <form class="target-edit-form">
       ${targetFormFields(target)}
       <div class="target-actions">
-        <button type="submit">Save</button>
-        <button type="button" data-target-action="handoff">Handoff</button>
-        <button type="button" data-target-action="delete">Delete</button>
+        <button type="submit">${escapeHtml(t("saveButton"))}</button>
+        <button type="button" data-target-action="handoff">${escapeHtml(t("handoffButton"))}</button>
+        <button type="button" data-target-action="delete">${escapeHtml(t("deleteButton"))}</button>
       </div>
     </form>
   `;
@@ -171,7 +360,7 @@ function renderTarget(account, target) {
 
   item.querySelector(".target-edit-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await withUiError("Save target failed", async () => {
+    await withUiError(t("saveTargetFailed"), async () => {
       await api(`/targets/${target.id}`, {
         method: "PATCH",
         body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
@@ -181,7 +370,7 @@ function renderTarget(account, target) {
   });
 
   item.querySelector('[data-target-action="handoff"]').addEventListener("click", async () => {
-    await withUiError("Handoff failed", async () => {
+    await withUiError(t("handoffFailed"), async () => {
       await api(`/accounts/${account.id}/handoff`, {
         method: "POST",
         body: JSON.stringify({
@@ -195,7 +384,7 @@ function renderTarget(account, target) {
   });
 
   item.querySelector('[data-target-action="delete"]').addEventListener("click", async () => {
-    await withUiError("Delete target failed", async () => {
+    await withUiError(t("deleteTargetFailed"), async () => {
       await api(`/targets/${target.id}`, { method: "DELETE" });
       await loadAccounts();
     });
@@ -208,15 +397,15 @@ function targetFormFields(target = {}) {
   return `
     <div class="form-grid">
       <label>
-        Billing
+        ${escapeHtml(t("billingLabel"))}
         <select name="billing_cycle">
-          <option value="monthly">monthly</option>
-          <option value="quarterly">quarterly</option>
-          <option value="yearly">yearly</option>
+          <option value="monthly">${escapeHtml(billingDisplayLabel("monthly"))}</option>
+          <option value="quarterly">${escapeHtml(billingDisplayLabel("quarterly"))}</option>
+          <option value="yearly">${escapeHtml(billingDisplayLabel("yearly"))}</option>
         </select>
       </label>
       <label>
-        Tier
+        ${escapeHtml(t("tierLabel"))}
         <select name="tier">
           <option value="Lite">Lite</option>
           <option value="Pro" selected>Pro</option>
@@ -224,43 +413,43 @@ function targetFormFields(target = {}) {
         </select>
       </label>
       <label>
-        Base interval
+        ${escapeHtml(t("baseIntervalLabel"))}
         <input name="interval" type="number" min="1" step="1" value="${numberValue(target.interval, 90)}" />
       </label>
       <label>
-        Base jitter
+        ${escapeHtml(t("baseJitterLabel"))}
         <input name="jitter" type="number" min="0" step="1" value="${numberValue(target.jitter, 30)}" />
       </label>
       <label>
-        Window start
+        ${escapeHtml(t("windowStartLabel"))}
         <input name="active_window_start" placeholder="10:00" value="${escapeAttr(target.active_window_start || "")}" />
       </label>
       <label>
-        Window end
+        ${escapeHtml(t("windowEndLabel"))}
         <input name="active_window_end" placeholder="10:30" value="${escapeAttr(target.active_window_end || "")}" />
       </label>
       <label>
-        Timezone
-        <input name="active_timezone" placeholder="local or Asia/Shanghai" value="${escapeAttr(target.active_timezone || "")}" />
+        ${escapeHtml(t("timezoneLabel"))}
+        <input name="active_timezone" placeholder="${escapeAttr(t("timezonePlaceholder"))}" value="${escapeAttr(target.active_timezone || "")}" />
       </label>
       <label>
-        Active interval
+        ${escapeHtml(t("activeIntervalLabel"))}
         <input name="active_interval_seconds" type="number" min="1" step="0.5" value="${numberValue(target.active_interval_seconds, 3)}" />
       </label>
       <label>
-        Active jitter
+        ${escapeHtml(t("activeJitterLabel"))}
         <input name="active_jitter_seconds" type="number" min="0" step="0.5" value="${numberValue(target.active_jitter_seconds, 1)}" />
       </label>
       <label>
-        Idle interval
+        ${escapeHtml(t("idleIntervalLabel"))}
         <input name="idle_interval_seconds" type="number" min="1" step="1" value="${numberValue(target.idle_interval_seconds, 600)}" />
       </label>
     </div>
     <div class="checkbox-row">
-      ${checkbox("enabled", target.enabled ?? true, "Enabled")}
-      ${checkbox("dry_run", target.dry_run ?? false, "Dry run")}
-      ${checkbox("auto_click_entry", target.auto_click_entry ?? true, "Click entry in handoff")}
-      ${checkbox("on_hit_handoff", target.on_hit_handoff ?? true, "Open handoff on hit")}
+      ${checkbox("enabled", target.enabled ?? true, t("enabledLabel"))}
+      ${checkbox("dry_run", target.dry_run ?? false, t("dryRunLabel"))}
+      ${checkbox("auto_click_entry", target.auto_click_entry ?? true, t("clickEntryLabel"))}
+      ${checkbox("on_hit_handoff", target.on_hit_handoff ?? true, t("openHandoffLabel"))}
     </div>
   `;
 }
@@ -269,7 +458,7 @@ function checkbox(name, checked, label) {
   return `
     <label>
       <input name="${name}" type="checkbox" ${checked ? "checked" : ""} />
-      ${label}
+      ${escapeHtml(label)}
     </label>
   `;
 }
@@ -316,22 +505,22 @@ function connectEvents() {
   try {
     ws = new WebSocket(`${url}/ws/events${query}`);
   } catch (error) {
-    showStatus(`Connect events failed: ${errorText(error)}`);
+    showStatus(`${t("connectEventsFailed")}: ${errorText(error)}`);
     return;
   }
   ws.onmessage = (message) => {
     const payload = JSON.parse(message.data);
     prependEvent(payload);
     if (payload.event?.button_state === "auth_required" || payload.event?.type === "hit") {
-      void withUiError("Reload accounts failed", loadAccounts);
+      void withUiError(t("reloadAccountsFailed"), loadAccounts);
     }
   };
   ws.onerror = () => {
-    showStatus("WebSocket connection failed. Check daemon URL/token and local proxy bypass.");
+    showStatus(t("webSocketFailed"));
   };
   ws.onclose = (event) => {
     if (event.code !== 1000) {
-      showStatus(`WebSocket closed: code=${event.code}`, "info");
+      showStatus(t("webSocketClosed", { code: event.code }), "info");
     }
   };
 }
@@ -339,7 +528,7 @@ function connectEvents() {
 async function loadHandshake() {
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) {
-    showStatus("Tauri bridge is unavailable; fill Daemon and Token manually.", "info");
+    showStatus(t("tauriUnavailable"), "info");
     return;
   }
 
@@ -352,7 +541,7 @@ async function loadHandshake() {
     }
     await sleep(250);
   }
-  showStatus("Daemon handshake was not found. Check that the Tauri sidecar daemon started.", "error");
+  showStatus(t("handshakeMissing"), "error");
 }
 
 function sleep(ms) {
@@ -369,13 +558,13 @@ function prependEvent(payload) {
   actions.className = "event-actions";
 
   if (event.button_state === "auth_required") {
-    actions.append(eventButton("Login", () => api(`/accounts/${payload.account_id}/login`, {
+    actions.append(eventButton(t("loginButton"), () => api(`/accounts/${payload.account_id}/login`, {
       method: "POST",
       body: "{}",
     })));
   }
   if (event.type === "hit" && event.available) {
-    actions.append(eventButton("Handoff", () => handoffForEvent(payload)));
+    actions.append(eventButton(t("handoffButton"), () => handoffForEvent(payload)));
   }
 
   const pre = document.createElement("pre");
@@ -392,7 +581,7 @@ function eventButton(label, onClick) {
   button.type = "button";
   button.textContent = label;
   button.addEventListener("click", async () => {
-    await withUiError(`${label} failed`, async () => {
+    await withUiError(t("eventActionFailed", { action: label }), async () => {
       await onClick();
       await loadAccounts();
     });
@@ -418,7 +607,15 @@ function targetForEvent(payload) {
 }
 
 function targetLabel(target) {
-  return `${billingLabels[target.billing_cycle] || target.billing_cycle} / ${target.tier}`;
+  return `${billingEventLabels[target.billing_cycle] || target.billing_cycle} / ${target.tier}`;
+}
+
+function billingDisplayLabel(billingCycle) {
+  return billingDisplayLabels[currentLanguage]?.[billingCycle] || billingCycle;
+}
+
+function accountStatusLabel(status) {
+  return accountStatusLabels[currentLanguage]?.[status] || status;
 }
 
 function escapeHtml(value) {
@@ -441,29 +638,39 @@ function escapeAttr(value) {
 accountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(accountForm);
-  await withUiError("Add account failed", async () => {
+  await withUiError(t("addAccountFailed"), async () => {
+    const body = { display_name: form.get("display_name") };
+    const userDataDir = String(form.get("user_data_dir") || "").trim();
+    // 留空时不传 user_data_dir，由 daemon 自动管理 profile 目录。
+    if (userDataDir) {
+      body.user_data_dir = userDataDir;
+    }
     await api("/accounts", {
       method: "POST",
-      body: JSON.stringify({
-        display_name: form.get("display_name"),
-        user_data_dir: form.get("user_data_dir"),
-      }),
+      body: JSON.stringify(body),
     });
     accountForm.reset();
     await loadAccounts();
   });
 });
 
-refreshButton.addEventListener("click", () => void withUiError("Refresh failed", loadAccounts));
+refreshButton.addEventListener("click", () => void withUiError(t("refreshFailed"), loadAccounts));
 daemonUrlInput.addEventListener("change", () => {
   connectEvents();
-  void withUiError("Load accounts failed", loadAccounts);
+  void withUiError(t("loadAccountsFailed"), loadAccounts);
 });
 daemonTokenInput.addEventListener("change", () => {
   connectEvents();
-  void withUiError("Load accounts failed", loadAccounts);
+  void withUiError(t("loadAccountsFailed"), loadAccounts);
+});
+languageSelect.addEventListener("change", () => {
+  currentLanguage = languageSelect.value;
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, currentLanguage);
+  applyI18n();
+  void withUiError(t("loadAccountsFailed"), loadAccounts);
 });
 
+applyI18n();
 await loadHandshake();
 connectEvents();
-void withUiError("Load accounts failed", loadAccounts);
+void withUiError(t("loadAccountsFailed"), loadAccounts);
