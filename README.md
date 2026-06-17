@@ -1,119 +1,454 @@
+English | [中文](README.zh-CN.md)
+
+<!-- Keep README.md and README.zh-CN.md in sync when changing onboarding docs. -->
+
 # glm-coding-plan-watcher
 
-浏览器自动化 worker，用于监控 [GLM Coding Plan](https://www.bigmodel.cn/glm-coding)
-指定套餐（计费周期 × Lite/Pro/Max）是否可购买。命中时会记录日志、截图、保存 HTML 快照、
-发送通知，并默认点击「购买/订阅入口」后暂停，等待人工完成后续支付。
+Personal availability monitor for [GLM Coding Plan](https://www.bigmodel.cn/glm-coding) plans.
 
-本项目仅用于个人可用性监控与提醒。使用者需自行遵守目标网站服务条款。
+Safety boundary: this project only monitors and notifies. Login and payment stay manual. It does
+not store passwords, solve CAPTCHA/risk checks, bypass controls, or automatically complete payment.
+When enabled, it clicks only the purchase/subscription entry once and then waits for the user.
 
-## 安装
+## What You Can Run
 
-本项目要求 Python 3.11+。当前开发环境建议使用 Homebrew Python 3.12：
+- CLI: one-off `check`, manual `login`, continuous `watch`, selector debugging.
+- Local daemon: FastAPI + SQLite + account-level headless workers, controlled through REST/WS.
+- Tauri GUI dev shell: menu-bar app that starts the daemon and talks to it over localhost.
+- macOS `.app`: Tauri bundle with a PyInstaller Python sidecar.
+
+## Prerequisites On macOS
+
+CLI and daemon need only Python 3.11+ and Playwright Chromium. GUI development and `.app`
+packaging additionally need Rust/Cargo and Node/npm.
+
+Install Homebrew if needed:
 
 ```bash
-/opt/homebrew/bin/python3.12 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/playwright install chromium
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-常用验证：
+Install the common toolchain:
 
 ```bash
-.venv/bin/python -m compileall src
-.venv/bin/pytest
-.venv/bin/ruff check .
+brew install python@3.12
 ```
 
-## 首次登录
-
-先生成配置，再打开可视化浏览器手动登录。登录态保存在 `user_data_dir`，项目不保存账号密码。
+Install GUI/packaging tools only if you plan to use Tauri:
 
 ```bash
-.venv/bin/glm-plan init-config --output config.yaml
+brew install rust node
+```
+
+Check your machine:
+
+```bash
+make doctor
+```
+
+## Quickstart: CLI In 4 Commands
+
+```bash
+git clone https://github.com/lnuygah/glm-coding-plan-watcher.git
+cd glm-coding-plan-watcher
+make setup
+.venv/bin/glm-plan check --config config.yaml || true
+```
+
+`make setup` creates `.venv`, installs Python dependencies, installs Playwright Chromium, and writes
+`config.yaml` if it does not already exist. The final `|| true` is intentional: `check` exits `1`
+when the selected plan is not available.
+
+## Configuration
+
+The default config is `config.yaml`, generated from the project defaults.
+
+Important fields:
+
+- `billing_cycle`: `monthly`, `quarterly`, or `yearly`.
+- `tier`: `Lite`, `Pro`, or `Max`.
+- `targets`: optional account-level list of `{billing_cycle, tier}` targets. If omitted, the top-level
+  `billing_cycle` and `tier` are used.
+- `user_data_dir`: Playwright persistent profile directory. One account/profile must not be opened by
+  multiple workers at the same time.
+- `refresh_interval_seconds` and `refresh_jitter_seconds`: account-level low-frequency cadence.
+- `auto_click_entry`: default `true`; when a hit is available, click only the entry button once.
+- `dry_run`: set `true` for safe demonstrations; detect and notify without clicking.
+
+Login state is stored in `user_data_dir`; account passwords are never stored by this project.
+
+## Running
+
+### CLI: Login
+
+Open a visible browser, log in manually, then close the browser window to save the profile:
+
+```bash
 .venv/bin/glm-plan login --config config.yaml
 ```
 
-登录完成后回到终端按 Enter，后续 `check` / `watch` 会复用同一 `user_data_dir`。
-
-## 配置
-
-参考 [config.example.yaml](config.example.yaml)。一个配置文件只对应一个目标和一个进程；多目标请复制多份配置并使用不同的 `user_data_dir`。
-
-关键字段：
-
-- `billing_cycle`: `monthly` / `quarterly` / `yearly`，对应页面「连续包月 / 连续包季 / 连续包年」。
-- `tier`: `Lite` / `Pro` / `Max`。
-- `refresh_interval_seconds`: 基础刷新间隔，默认 `90` 秒。
-- `refresh_jitter_seconds`: 随机抖动，默认 `30` 秒，避免固定频率刷新。
-- `auto_click_entry`: 默认 `true`。命中时只点击购买/订阅入口，然后暂停等待人工。
-- `dry_run`: 默认 `false`。设为 `true` 时只检测和通知，不点击入口。
-- `notify.webhook_url`: 建议用环境变量 `GLM_WATCHER__NOTIFY__WEBHOOK_URL` 设置。
-
-配置优先级：环境变量和 `.env` 高于 YAML，高于默认值。
-
-## 命令
-
-单次检测，退出码 `0` 表示可购买，`1` 表示不可购买或未定位到：
+Equivalent Make target:
 
 ```bash
-.venv/bin/glm-plan check --config config.yaml
+make login
 ```
 
-循环监控。`watch` 每轮向 stdout 输出一行 `WatchEvent` JSON，供后续 FastAPI 父进程消费；人类日志写入 stderr 和 `logs/app.log`。
+### CLI: One-Off Check
+
+```bash
+.venv/bin/glm-plan check --config config.yaml || true
+```
+
+The JSON output includes `available`, `button_state`, `button_text`, `reason`, and `checked_at`.
+Exit code `0` means available; exit code `1` means unavailable/not found.
+
+Equivalent Make target:
+
+```bash
+make check
+```
+
+### CLI: Continuous Watch
 
 ```bash
 .venv/bin/glm-plan watch --config config.yaml
 ```
 
-调试 selector，保存当前 HTML 并输出周期 tab、套餐卡片、按钮文本和属性：
+Machine-readable `WatchEvent` JSON lines go to stdout. Human logs go to stderr and `logs/app.log`.
+Stop gracefully with `Ctrl+C` or `SIGTERM`.
+
+For a safe demo, set `dry_run: true` in a copy of the config before running watch:
+
+```bash
+cp config.yaml config.dry-run.yaml
+python3 - <<'PY'
+from pathlib import Path
+path = Path("config.dry-run.yaml")
+text = path.read_text()
+text = text.replace("dry_run: false", "dry_run: true")
+path.write_text(text)
+PY
+.venv/bin/glm-plan watch --config config.dry-run.yaml
+```
+
+Equivalent Make target:
+
+```bash
+make watch CONFIG=config.dry-run.yaml
+```
+
+### CLI: Debug Selectors
 
 ```bash
 .venv/bin/glm-plan debug-selectors --config config.yaml --headful
 ```
 
-## 检测策略
+This opens the page, saves an HTML snapshot, and prints the current tab/card/button texts and attrs.
 
-当前真实 DOM 校准结果：
-
-- 周期切换器：`#switchTabBox .switch-tab-item`，激活态 class 包含 `active`。
-- 套餐卡片：`.package-list .package-card-box`。
-- 卡片标题：`.package-card-title span.font-prompt`，文本精确匹配 `Lite` / `Pro` / `Max`。
-- 按钮：`button.buy-btn`。
-
-真实售罄按钮样本：
-
-```html
-<button disabled="disabled" class="el-button el-tooltip buy-btn el-button--primary is-disabled disabled" name="暂时售罄 ｜06月18日 10:00 补货">
-  <span> 暂时售罄 ｜06月18日 10:00 补货 </span>
-</button>
-```
-
-`tests/fixtures/sold_out.html` 使用真实售罄标记；`available.html` 已用 2026-06-17 抓取的**未登录态**真实样本校准（三档按钮文案 `特惠订阅`，Pro 额外带 `special` class）。`unavailable.html` 仍是覆盖 disabled / aria-disabled / class disabled 的构造样本。
-
-注意：页面是 JS 渲染的 SPA，套餐卡片在 `domcontentloaded` 之后才出现，检测前会显式等待 `.package-card-box` 可见（见 `DomDetector.wait_for_content`）。另外**未登录与已登录看到的状态可能不同**（例如已订阅账号会显示不可购买）；如需按登录态监控，请先用 `glm-plan login` 手动登录，登录态保存在 `user_data_dir`，不保存账号密码。状态变化后可再次运行 `debug-selectors` 校准。
-
-## 安全与合规边界
-
-本项目不会实现，也不应添加：
-
-- 验证码识别、滑块破解、风控绕过。
-- 隐藏自动化痕迹或规避检测。
-- 并发刷接口、下单接口轮询、抢购支付自动化。
-- 保存账号密码。
-- 自动确认付款或完成支付。
-
-允许行为只限：正常页面打开、低频带 jitter 刷新、读取公开 DOM、通知用户、命中时点击一次购买/订阅入口并等待人工。
-
-## GitHub 初始化参考
+Equivalent Make target:
 
 ```bash
-git init
-git add .
-git commit -m "chore: project scaffold"
-git remote add origin <repo-url>
-git push -u origin main
+make debug
 ```
 
-## 开发备注
+### Daemon: REST + WebSocket
 
-结构化事件模型在 `WatchEvent` 中定义。未来编排层可以把每个 watcher 当作子进程 worker，通过 stdout JSON 行读取状态，通过 SIGTERM/SIGINT 优雅停止。
+Start the local daemon on a random localhost port:
+
+```bash
+.venv/bin/glm-plan serve \
+  --host 127.0.0.1 \
+  --port 0 \
+  --db daemon.sqlite3 \
+  --handshake daemon.handshake.json
+```
+
+`--port 0` asks the OS for a free port. If `--token` is omitted, the daemon generates a per-launch
+token. The handshake file contains:
+
+```json
+{"host": "127.0.0.1", "port": 49152, "token": "..."}
+```
+
+Only `/health` is unauthenticated. Every other REST route requires
+`Authorization: Bearer <token>`. `/ws/events` requires `?token=<token>`.
+
+In another terminal:
+
+```bash
+export no_proxy=127.0.0.1,localhost
+export HANDSHAKE=daemon.handshake.json
+export HOST=$(.venv/bin/python -c 'import json,os; print(json.load(open(os.environ["HANDSHAKE"]))["host"])')
+export PORT=$(.venv/bin/python -c 'import json,os; print(json.load(open(os.environ["HANDSHAKE"]))["port"])')
+export TOKEN=$(.venv/bin/python -c 'import json,os; print(json.load(open(os.environ["HANDSHAKE"]))["token"])')
+export BASE_URL="http://$HOST:$PORT"
+```
+
+Create an account and a dry-run target:
+
+```bash
+export PROFILE="$PWD/user_data/daemon-demo"
+
+export ACCOUNT_ID=$(
+  curl -sS -X POST "$BASE_URL/accounts" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"display_name\":\"daemon-demo\",\"user_data_dir\":\"$PROFILE\"}" \
+  | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["id"])'
+)
+
+export TARGET_ID=$(
+  curl -sS -X POST "$BASE_URL/accounts/$ACCOUNT_ID/targets" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"billing_cycle":"monthly","tier":"Pro","enabled":true,"interval":90,"jitter":30,"dry_run":true,"auto_click_entry":false}' \
+  | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["id"])'
+)
+```
+
+Start, inspect, and stop the headless worker:
+
+```bash
+curl -sS -X POST "$BASE_URL/accounts/$ACCOUNT_ID/worker/start" \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -sS "$BASE_URL/events?account_id=$ACCOUNT_ID&limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -sS -X POST "$BASE_URL/accounts/$ACCOUNT_ID/worker/stop" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Open a visible login or handoff session:
+
+```bash
+curl -sS -X POST "$BASE_URL/accounts/$ACCOUNT_ID/login" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"restore_worker":false}'
+
+curl -sS -X POST "$BASE_URL/accounts/$ACCOUNT_ID/handoff" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"target_id\":$TARGET_ID,\"click_entry\":false,\"restore_worker\":false}"
+```
+
+Subscribe to live events:
+
+```bash
+.venv/bin/python - <<'PY'
+import asyncio
+import os
+import websockets
+
+async def main():
+    uri = f"ws://{os.environ['HOST']}:{os.environ['PORT']}/ws/events?token={os.environ['TOKEN']}"
+    async with websockets.connect(uri) as ws:
+        async for message in ws:
+            print(message)
+
+asyncio.run(main())
+PY
+```
+
+Equivalent Make target for starting the daemon:
+
+```bash
+make serve
+```
+
+### Tauri GUI Development
+
+Install GUI prerequisites first: Rust/Cargo and Node/npm.
+
+```bash
+export GLM_WATCHER_DAEMON_BIN="$PWD/.venv/bin/glm-plan"
+npm install
+npm run tauri:dev
+```
+
+Equivalent Make target:
+
+```bash
+make gui
+```
+
+The Tauri shell starts the daemon with `--port 0`, a per-launch token, and an app-data handshake
+file. Daemon binary lookup order:
+
+1. `GLM_WATCHER_DAEMON_BIN`
+2. bundled sidecar in Tauri resource/current-exe directories
+3. `glm-plan` on `PATH`
+
+In the GUI, add an account using an absolute `user_data_dir`, add targets, then use Start/Login/Handoff.
+Daemon workers are headless. Login and handoff stop that account worker first and open a visible
+browser using the same profile. One account profile cannot be used concurrently.
+
+### Build A macOS `.app`
+
+Install packaging dependencies, build the Python sidecar, copy it to the Tauri target-triple name,
+then build:
+
+```bash
+make app
+```
+
+Manual equivalent for Apple Silicon:
+
+```bash
+.venv/bin/pip install -e ".[server,packaging]"
+.venv/bin/pyinstaller packaging/glm-plan-daemon.spec --noconfirm --distpath sidecar/bin
+cp sidecar/bin/glm-plan-daemon sidecar/bin/glm-plan-daemon-aarch64-apple-darwin
+chmod +x sidecar/bin/glm-plan-daemon-aarch64-apple-darwin
+npm install
+npm run tauri:build
+```
+
+Manual equivalent for Intel Mac: copy to `sidecar/bin/glm-plan-daemon-x86_64-apple-darwin` instead.
+
+The repository includes a small dev placeholder shim at
+`sidecar/bin/glm-plan-daemon-aarch64-apple-darwin` that delegates to `glm-plan` on `PATH`. It is not
+a production daemon binary. Replace it with the PyInstaller-built sidecar before shipping a `.app`.
+
+## Make Targets
+
+```bash
+make doctor   # print Python/cargo/node/npm versions and install hints
+make setup    # create .venv, install Python deps, install Chromium, init config.yaml if absent
+make check    # run one CLI check; unavailable exit code is treated as a normal result
+make login    # open visible manual login session
+make watch    # run continuous watch
+make serve    # start daemon with --port 0 and daemon.handshake.json
+make debug    # run debug-selectors --headful
+make test     # pytest
+make lint     # ruff
+make gui      # npm install + tauri dev, using .venv/bin/glm-plan as daemon
+make app      # build PyInstaller sidecar + tauri app
+make clean    # remove build/cache/runtime files, but keep user_data/
+```
+
+Common overrides:
+
+```bash
+make watch CONFIG=config.dry-run.yaml
+make serve DB=/tmp/glm-watcher.sqlite3 HANDSHAKE=/tmp/glm-watcher.handshake.json
+make gui GLM_WATCHER_DAEMON_BIN="$PWD/.venv/bin/glm-plan"
+```
+
+## Lockfile Policy
+
+This is an application-style repository, so lockfiles should be committed for reproducible GUI and
+packaging builds:
+
+- `package-lock.json` should be committed.
+- `src-tauri/Cargo.lock` should remain committed.
+
+Generated outputs remain ignored: `node_modules/`, `src-tauri/target/`, daemon SQLite files,
+handshake/token files, PyInstaller build/dist output, and real sidecar binaries.
+
+## Troubleshooting
+
+### Local daemon curl returns 502 with a local HTTP proxy
+
+If your shell has a proxy such as `http_proxy=http://127.0.0.1:7897`, `curl` may send local daemon
+requests through the proxy and get a 502.
+
+Use:
+
+```bash
+export no_proxy=127.0.0.1,localhost
+```
+
+or clear proxy variables for this shell:
+
+```bash
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+```
+
+### Playwright cannot launch Chromium
+
+Install Chromium for Playwright:
+
+```bash
+.venv/bin/playwright install chromium
+```
+
+The first install can be slow.
+
+### Python version is too old
+
+Python 3.11+ is required. Prefer Homebrew Python 3.12:
+
+```bash
+brew install python@3.12
+make setup
+```
+
+If `python3` points to an older version, run:
+
+```bash
+PYTHON=/opt/homebrew/bin/python3.12 make setup
+```
+
+### Unsigned `.app` is blocked by Gatekeeper
+
+For a local unsigned build, macOS may show "cannot be opened because it is from an unidentified
+developer".
+
+Options:
+
+```bash
+xattr -dr com.apple.quarantine "src-tauri/target/release/bundle/macos/GLM Plan Watcher.app"
+```
+
+or right-click the app and choose Open.
+
+For local testing you can also ad-hoc sign:
+
+```bash
+codesign --force --deep --sign - "src-tauri/target/release/bundle/macos/GLM Plan Watcher.app"
+```
+
+Production distribution should use proper Apple Developer signing and notarization.
+
+### Sidecar placeholder accidentally shipped
+
+If the packaged app only works on machines that already have `glm-plan` on `PATH`, you likely shipped
+the dev shim instead of the PyInstaller sidecar. Rebuild with:
+
+```bash
+make app
+```
+
+and verify the target-triple sidecar is a real binary, not:
+
+```sh
+#!/usr/bin/env sh
+exec glm-plan "$@"
+```
+
+### Already subscribed account shows sold out
+
+Real page state depends on login state. An already subscribed account can show `sold_out`. A fresh
+not-logged-in profile may show `available` with button text like `特惠订阅`; use `dry_run: true` for
+safe demos.
+
+## Development Checks
+
+```bash
+.venv/bin/python -m compileall src
+.venv/bin/pytest
+.venv/bin/ruff check .
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+## DOM Detection Notes
+
+Current GLM DOM selectors:
+
+- Billing tabs: `#switchTabBox .switch-tab-item`
+- Plan cards: `.package-list .package-card-box`
+- Card title: `.package-card-title span.font-prompt`
+- Entry button: `button.buy-btn`
+
+Use `debug-selectors` when the site changes.
