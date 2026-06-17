@@ -7,6 +7,7 @@ from playwright.async_api import Page
 
 from glm_plan_watcher.detector import DomDetector, classify_button, looks_like_auth_required
 from glm_plan_watcher.models import BillingCycle, ButtonState, TargetSpec, Tier
+from glm_plan_watcher.site_adapter import GlmSiteAdapter
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -48,7 +49,10 @@ def test_looks_like_auth_required(text: str, expected: bool) -> None:
 async def test_dom_detector_available(page) -> None:
     await load_fixture(page, "available.html")
 
-    result = await DomDetector().detect(page, TargetSpec(billing_cycle=BillingCycle.monthly, tier=Tier.Pro))
+    result = await DomDetector(adapter=GlmSiteAdapter()).detect(
+        page,
+        TargetSpec(billing_cycle=BillingCycle.monthly, tier=Tier.Pro),
+    )
 
     assert result.state is ButtonState.available
     assert result.available is True
@@ -59,7 +63,10 @@ async def test_dom_detector_available(page) -> None:
 async def test_dom_detector_sold_out_real_button_markup(page) -> None:
     await load_fixture(page, "sold_out.html")
 
-    result = await DomDetector().detect(page, TargetSpec(billing_cycle=BillingCycle.monthly, tier=Tier.Pro))
+    result = await DomDetector(adapter=GlmSiteAdapter()).detect(
+        page,
+        TargetSpec(billing_cycle=BillingCycle.monthly, tier=Tier.Pro),
+    )
 
     assert result.state is ButtonState.sold_out
     assert result.available is False
@@ -71,7 +78,7 @@ async def test_dom_detector_sold_out_real_button_markup(page) -> None:
 @pytest.mark.browser
 async def test_dom_detector_auth_required_when_cards_missing(page) -> None:
     await load_fixture(page, "auth_required.html")
-    detector = DomDetector()
+    detector = DomDetector(adapter=GlmSiteAdapter())
 
     async def no_wait(_page: Page, timeout_ms: int = 15_000) -> None:
         return None
@@ -96,7 +103,10 @@ async def test_dom_detector_auth_required_when_cards_missing(page) -> None:
 async def test_dom_detector_disabled_variants(page, tier: Tier, reason_part: str) -> None:
     await load_fixture(page, "unavailable.html")
 
-    result = await DomDetector().detect(page, TargetSpec(billing_cycle=BillingCycle.monthly, tier=tier))
+    result = await DomDetector(adapter=GlmSiteAdapter()).detect(
+        page,
+        TargetSpec(billing_cycle=BillingCycle.monthly, tier=tier),
+    )
 
     assert result.state is ButtonState.disabled
     assert result.available is False
