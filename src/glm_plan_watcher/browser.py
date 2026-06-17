@@ -56,7 +56,7 @@ class BrowserSession:
     async def goto(self, url: str) -> Page:
         page = self.require_page()
         try:
-            await page.goto(url, wait_until="domcontentloaded")
+            await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
             return page
         except Exception as exc:
             raise BrowserError(f"页面打开失败：{url}: {exc}") from exc

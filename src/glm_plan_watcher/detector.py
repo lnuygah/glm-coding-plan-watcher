@@ -89,6 +89,7 @@ class DomDetector(DetectorStrategy):
     """基于真实 DOM 的三段定位检测。"""
 
     async def detect(self, page: Page, target: TargetSpec) -> CheckResult:
+        await self.wait_for_content(page)
         await self.ensure_billing_cycle(page, target)
         card = await self.find_tier_card(page, target)
         if card is None:
@@ -116,6 +117,19 @@ class DomDetector(DetectorStrategy):
             reason=classification.reason,
             attrs=attrs,
         )
+
+    async def wait_for_content(self, page: Page, timeout_ms: int = 15_000) -> None:
+        """等待 SPA 渲染出套餐卡片再检测。
+
+        页面是 JS 渲染的 SPA，`domcontentloaded` 时套餐列表往往尚未出现；这里显式等待
+        `.package-card-box` 可见。超时则放行（让上层得到 not_found，而非长时间卡住），
+        本地 fixture（无网络渲染）也能立即通过。
+        """
+
+        with suppress(PlaywrightTimeoutError):
+            await page.locator(CSS_PACKAGE_CARD_BOX).first.wait_for(
+                state="visible", timeout=timeout_ms
+            )
 
     async def ensure_billing_cycle(self, page: Page, target: TargetSpec) -> None:
         """切到目标计费周期；fixture 或页面缺 tab 时保持当前页面。"""
@@ -189,6 +203,7 @@ class DomDetector(DetectorStrategy):
     async def debug_snapshot(self, page: Page) -> dict[str, object]:
         """输出页面关键 selector 的文本和属性，供 debug-selectors 使用。"""
 
+        await self.wait_for_content(page)
         tabs: list[dict[str, str]] = []
         for index in range(await page.locator(CSS_SWITCH_TAB_ITEM).count()):
             tab = page.locator(CSS_SWITCH_TAB_ITEM).nth(index)

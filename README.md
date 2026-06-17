@@ -88,7 +88,9 @@
 </button>
 ```
 
-`tests/fixtures/sold_out.html` 使用该真实售罄标记。`available.html` 和 `unavailable.html` 是占位假设样本；当前没有真实可购买 DOM。页面补货后应运行 `debug-selectors`，用真实按钮文案和属性校准 `selectors.py` 与 fixture。
+`tests/fixtures/sold_out.html` 使用真实售罄标记；`available.html` 已用 2026-06-17 抓取的**未登录态**真实样本校准（三档按钮文案 `特惠订阅`，Pro 额外带 `special` class）。`unavailable.html` 仍是覆盖 disabled / aria-disabled / class disabled 的构造样本。
+
+注意：页面是 JS 渲染的 SPA，套餐卡片在 `domcontentloaded` 之后才出现，检测前会显式等待 `.package-card-box` 可见（见 `DomDetector.wait_for_content`）。另外**未登录与已登录看到的状态可能不同**（例如已订阅账号会显示不可购买）；如需按登录态监控，请先用 `glm-plan login` 手动登录，登录态保存在 `user_data_dir`，不保存账号密码。状态变化后可再次运行 `debug-selectors` 校准。
 
 ## 安全与合规边界
 

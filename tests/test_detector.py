@@ -40,7 +40,7 @@ async def test_dom_detector_available(page) -> None:
 
     assert result.state is ButtonState.available
     assert result.available is True
-    assert result.button_text == "立即订阅"
+    assert result.button_text == "特惠订阅"
 
 
 @pytest.mark.browser
