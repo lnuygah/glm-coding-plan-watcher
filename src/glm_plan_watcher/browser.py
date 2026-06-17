@@ -94,6 +94,8 @@ class BrowserSession:
             with suppress(Exception):
                 await self.context.close()
             self.context = None
+            # context 关闭后旧 page 已失效，清掉引用避免 relaunch 后误用 stale page。
+            self.page = None
         if self.playwright is not None:
             with suppress(Exception):
                 await self.playwright.stop()

@@ -95,6 +95,9 @@ class WorkerSupervisor:
         # worker spawn 在后台进行：_starting 占位互斥，_spawn_tasks 持有任务引用避免被 GC。
         self._starting: set[int] = set()
         self._spawn_tasks: set[asyncio.Task[None]] = set()
+        # 每账号正在进行的后台 spawn 任务，供 stop_worker 在启动 login/handoff 前 drain，
+        # 避免后台 spawn 出来的 worker 与紧随其后的 headful 会话抢占同一 profile。
+        self._spawn_tasks_by_account: dict[int, asyncio.Task[None]] = {}
 
     async def start_worker(self, account_id: int) -> dict[str, object]:
         """请求启动账号 worker，并尽快返回。
@@ -133,7 +136,14 @@ class WorkerSupervisor:
 
         task = asyncio.create_task(self._spawn_worker_process(account_id, config_path))
         self._spawn_tasks.add(task)
-        task.add_done_callback(self._spawn_tasks.discard)
+        self._spawn_tasks_by_account[account_id] = task
+
+        def _clear_spawn(finished: asyncio.Task[None], aid: int = account_id) -> None:
+            self._spawn_tasks.discard(finished)
+            if self._spawn_tasks_by_account.get(aid) is finished:
+                self._spawn_tasks_by_account.pop(aid, None)
+
+        task.add_done_callback(_clear_spawn)
         return self.worker_status(account_id)
 
     async def _spawn_worker_process(self, account_id: int, config_path: Path) -> None:
@@ -155,10 +165,10 @@ class WorkerSupervisor:
             )
             return
 
-        # spawn 期间若被 stop_worker 取消（占位已被移除），不接管这个进程，直接终止收场。
+        # spawn 期间若被 stop_worker 取消（占位已被移除），不接管这个进程，终止并 await 回收，
+        # 避免遗留进程继续占用 profile。
         if account_id not in self._starting:
-            with suppress(Exception):
-                process.terminate()
+            await self._terminate_process(process)
             return
 
         handle = WorkerHandle(
@@ -223,16 +233,18 @@ class WorkerSupervisor:
         # 若 spawn 还在后台进行，清除占位：_spawn_worker_process 完成后发现自己已被取消，会终止刚
         # spawn 出来的进程而不接管，避免 stop 之后又冒出一个 worker。
         self._starting.discard(account_id)
+        # drain 正在进行的后台 spawn：清除占位后 await 它结束——它会发现 _starting 已清除并终止刚
+        # spawn 的进程，或已注册 handle（下面统一拆除）。这样 login/handoff 在 stop 之后不会与残余
+        # worker 抢占同一 profile。
+        spawn_task = self._spawn_tasks_by_account.get(account_id)
+        if spawn_task is not None:
+            with suppress(asyncio.CancelledError):
+                await spawn_task
+
         handle = self._handles.get(account_id)
         if handle is not None:
             handle.desired_running = False
-            if handle.process.returncode is None:
-                handle.process.terminate()
-                try:
-                    await asyncio.wait_for(handle.process.wait(), timeout=10)
-                except TimeoutError:
-                    handle.process.kill()
-                    await handle.process.wait()
+            await self._terminate_process(handle.process)
             if handle.ingest_task is not None:
                 handle.ingest_task.cancel()
             self._handles.pop(account_id, None)
@@ -241,6 +253,21 @@ class WorkerSupervisor:
         self.repository.update_worker_status(account_id, status="stopped", pid=None)
         self.repository.update_account(account_id, status="stopped")
         return self.worker_status(account_id)
+
+    async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
+        """终止子进程并回收：先 terminate，超时再 kill，始终 await wait，避免遗留僵尸进程。"""
+
+        if process.returncode is not None:
+            return
+        with suppress(Exception):
+            process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except TimeoutError:
+            with suppress(Exception):
+                process.kill()
+            with suppress(Exception):
+                await process.wait()
 
     def worker_status(self, account_id: int) -> dict[str, object]:
         worker = self.repository.get_worker(account_id)
@@ -463,6 +490,11 @@ class WorkerSupervisor:
         _event_id: int,
     ) -> None:
         if event.type != "hit" or not event.available:
+            return
+        # visible-in-window 模式下 worker 自身就是可见浏览器，命中时已就地点击入口并在等待人工
+        # 付款（事件带 action="clicked_entry"）。此时再起 handoff 会 stop_worker 把可见浏览器杀掉，
+        # 违背"省去重启延迟"的设计——直接跳过。窗口外（未点击）仍走正常 handoff。
+        if event.action == "clicked_entry":
             return
 
         target = self._matching_target_row(account_id, event.target)

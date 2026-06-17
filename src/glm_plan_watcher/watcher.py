@@ -83,7 +83,15 @@ class AccountWatcher:
             pending_events: list[_PendingEvent] = []
 
             # 进入/离开开售时段时，在同一进程内切换可见/headless 模式（不另起进程，保持 profile 互斥）。
-            page = await self._maybe_switch_browser_mode(session, page)
+            # 切换需重建 context；relaunch/goto 失败时先发结构化 error+shutdown JSON 行，再退出，
+            # 避免父进程只看到 crashed 而收不到结构化事件。
+            try:
+                page = await self._maybe_switch_browser_mode(session, page)
+            except Exception as exc:
+                self.logger.exception("浏览器模式切换失败：%s", exc)
+                self._emit_browser_switch_error(check_index, exc)
+                self._emit_shutdown(check_index)
+                return 1
 
             for target in self.targets:
                 if self._stop.is_set():
@@ -288,6 +296,19 @@ class AccountWatcher:
                 action=action,
                 next_refresh_at=next_refresh_at,
                 message=message,
+            )
+        )
+
+    def _emit_browser_switch_error(self, check_index: int, exc: Exception) -> None:
+        self._emit_raw_event(
+            WatchEvent(
+                type="error",
+                check_index=check_index,
+                target=self._account_event_target(),
+                button_state="error",
+                available=False,
+                action="none",
+                message=f"browser mode switch failed: {exc}",
             )
         )
 

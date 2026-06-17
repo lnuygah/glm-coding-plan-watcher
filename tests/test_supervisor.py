@@ -292,6 +292,81 @@ async def test_auto_handoff_skips_dry_run_target(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_auto_handoff_skipped_when_worker_clicked_in_place(tmp_path: Path) -> None:
+    # visible-in-window worker 已就地点击（event.action=clicked_entry）并在等待人工付款；
+    # daemon 不应再起 handoff，否则会 stop_worker 杀掉那个正在付款的可见浏览器。
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account = repo.create_account("main", str(tmp_path / "profile"))
+    repo.create_target(
+        account["id"],
+        billing_cycle="monthly",
+        tier="Pro",
+        visible_in_window=True,
+    )
+    account_id = int(account["id"])
+    headless_factory = FakeProcessFactory()
+    headful_factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(
+        repo,
+        EventBroadcaster(),
+        process_factory=headless_factory,
+        headful_launcher=headful_factory,
+    )
+
+    await supervisor.start_worker(account_id)
+    await _wait_for_spawn(supervisor)
+    await supervisor._handle_worker_event(  # noqa: SLF001 - targeted supervisor behavior test
+        account_id,
+        WatchEvent(
+            type="hit",
+            check_index=1,
+            target="连续包月 / Pro",
+            button_state="available",
+            available=True,
+            action="clicked_entry",
+        ),
+        1,
+    )
+    await asyncio.sleep(0)
+
+    assert headful_factory.commands == []
+    # 原 headless（其实是 visible-in-window）worker 仍存活，未被 stop。
+    assert headless_factory.processes[0].returncode is None
+
+    await supervisor.stop_worker(account_id)
+
+
+@pytest.mark.asyncio
+async def test_handoff_immediately_after_start_drains_background_spawn(tmp_path: Path) -> None:
+    # start 后立即 handoff（不等后台 spawn）：stop_worker 必须 drain 在飞的 spawn，确保后台
+    # spawn 出来的 worker 被终止回收，不与紧随其后的 headful 会话抢占同一 profile。
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    headless_factory = FakeProcessFactory()
+    headful_factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(
+        repo,
+        EventBroadcaster(),
+        process_factory=headless_factory,
+        headful_launcher=headful_factory,
+    )
+
+    await supervisor.start_worker(account_id)
+    result = await supervisor.start_handoff_session(account_id)
+
+    assert result["status"] == "handoff"
+    assert account_id not in supervisor._starting  # noqa: SLF001
+    # 后台 spawn 产出的 headless 进程被终止回收（returncode 已设），没有遗留并发占用 profile。
+    assert len(headless_factory.processes) == 1
+    assert headless_factory.processes[0].returncode is not None
+    assert len(headful_factory.commands) == 1
+    assert account_id not in supervisor._handles  # noqa: SLF001
+
+    headful_factory.processes[0].finish(0)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
 async def test_profile_mutex_blocks_worker_start_during_headful_session(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "daemon.sqlite3")
     account_id = seed_account(repo, tmp_path)

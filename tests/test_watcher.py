@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from io import StringIO
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -288,6 +289,42 @@ async def test_watcher_dry_run_suppresses_click_even_inside_visible_window() -> 
     events = _json_lines(output)
     assert events[0]["type"] == "hit"
     assert events[0]["action"] == "dry_run"
+
+
+class _FailingSwitchSession:
+    """relaunch 失败的 session 替身：验证模式切换异常时发 error+shutdown JSON 行并退出。"""
+
+    def __init__(self) -> None:
+        # headless=True 与 desired(visible)=False 不一致 → 触发切换 → relaunch 抛错。
+        self.config = SimpleNamespace(headless=True, url="https://example.test")
+
+    async def relaunch_headless(self, headless: bool) -> Any:
+        raise RuntimeError("relaunch boom")
+
+    async def goto(self, url: str) -> Any:  # pragma: no cover - 不应到达
+        raise AssertionError("goto should not be reached after relaunch failure")
+
+
+@pytest.mark.asyncio
+async def test_watcher_browser_switch_failure_emits_error_and_shutdown() -> None:
+    target = _visible_window_target()
+    inside = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    output = StringIO()
+    watcher = AccountWatcher(
+        AppConfig(targets=[target], auto_click_entry=False),
+        detector=FakeDetector(),
+        stdout=output,
+        scheduler_policy=_fixed_scheduler(inside),
+    )
+
+    code = await watcher.monitor(page=object(), session=_FailingSwitchSession())  # type: ignore[arg-type]
+
+    events = _json_lines(output)
+    types = [event["type"] for event in events]
+    assert code == 1
+    assert "error" in types
+    assert types[-1] == "shutdown"
+    assert any("switch failed" in (event.get("message") or "") for event in events)
 
 
 async def _noop_pause() -> None:

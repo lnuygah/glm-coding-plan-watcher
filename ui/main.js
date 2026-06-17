@@ -56,6 +56,7 @@ const translations = {
     advancedSettingsLabel: "高级设置",
     firstRunGuide: "① 登录 → ② 加任务 → ③ 开始监控",
     startMonitorButton: "③ 开始监控",
+    startingButton: "启动中…",
     addMonitorTaskPrimary: "② 添加监控任务",
     needLoginPrompt: "该账号需要登录：请点「① 登录」，在弹出的可见浏览器中手动登录，完成后关闭浏览器。",
     loginStepButton: "① 登录",
@@ -123,6 +124,7 @@ const translations = {
     advancedSettingsLabel: "Advanced settings",
     firstRunGuide: "① Login → ② Add task → ③ Start monitoring",
     startMonitorButton: "③ Start monitoring",
+    startingButton: "Starting…",
     addMonitorTaskPrimary: "② Add monitor task",
     needLoginPrompt: "This account needs login: click 《① Login》, sign in manually in the visible browser, then close it.",
     loginStepButton: "① Login",
@@ -164,6 +166,7 @@ const billingDisplayLabels = {
 const accountStatusLabels = {
   "zh-CN": {
     running: "运行中",
+    starting: "启动中",
     stopped: "已停止",
     login: "登录中",
     handoff: "付款衔接",
@@ -172,6 +175,7 @@ const accountStatusLabels = {
   },
   en: {
     running: "running",
+    starting: "starting",
     stopped: "stopped",
     login: "login",
     handoff: "handoff",
@@ -386,17 +390,24 @@ function renderAccount(account, targets) {
 function accountActionsMarkup(status, hasTargets) {
   const buttons = [];
   const seen = new Set();
-  const add = (action, labelKey, { primary = false, titleKey } = {}) => {
+  const add = (action, labelKey, { primary = false, titleKey, disabled = false } = {}) => {
     if (seen.has(action)) return;
     seen.add(action);
     const cls = primary ? "primary-action" : "secondary-action";
     const title = titleKey ? ` title="${escapeAttr(t(titleKey))}"` : "";
+    const dis = disabled ? " disabled" : "";
     buttons.push(
-      `<button data-action="${escapeAttr(action)}" class="${cls}"${title}>${escapeHtml(t(labelKey))}</button>`,
+      `<button data-action="${escapeAttr(action)}" class="${cls}"${title}${dis}>${escapeHtml(t(labelKey))}</button>`,
     );
   };
 
-  if (status === "running") {
+  // worker/start 现在是异步的：账号先进入 "starting"，再由 heartbeat 翻成 running。
+  // starting 期间用一个禁用的"启动中…"占位并提供 停止，避免用户重复点击 启动。
+  const monitoring = status === "running" || status === "starting";
+
+  if (status === "starting") {
+    add("starting", "startingButton", { primary: true, disabled: true });
+  } else if (status === "running") {
     add("stop", "stopButton", { primary: true });
   } else if (status === "login") {
     add("login", "loginStepButton", { primary: true });
@@ -410,8 +421,8 @@ function accountActionsMarkup(status, hasTargets) {
 
   // Labeled secondary steps. Login is always reachable.
   add("login", "loginStepButton");
-  if (hasTargets && status !== "running") add("start", "startButton");
-  if (status === "running") add("stop", "stopButton");
+  if (hasTargets && !monitoring) add("start", "startButton");
+  if (monitoring) add("stop", "stopButton");
   add("handoff", "handoffButton", { titleKey: "handoffButtonTitle" });
 
   return buttons.join("");
@@ -600,10 +611,19 @@ function connectEvents() {
   ws.onmessage = (message) => {
     const payload = JSON.parse(message.data);
     prependEvent(payload);
-    if (payload.event?.button_state === "auth_required" && payload.account_id != null) {
-      authRequiredAccounts.add(payload.account_id);
+    const event = payload.event ?? {};
+    const accountId = payload.account_id;
+    let needsReload = event.type === "hit";
+    if (accountId != null) {
+      if (event.button_state === "auth_required") {
+        if (!authRequiredAccounts.has(accountId)) needsReload = true;
+        authRequiredAccounts.add(accountId);
+      } else if (event.type === "check" || event.type === "hit") {
+        // 登录态恢复后，普通 check/hit 不再是 auth_required → 清掉"需登录"提示并刷新一次。
+        if (authRequiredAccounts.delete(accountId)) needsReload = true;
+      }
     }
-    if (payload.event?.button_state === "auth_required" || payload.event?.type === "hit") {
+    if (needsReload) {
       void withUiError(t("reloadAccountsFailed"), loadAccounts);
     }
   };
