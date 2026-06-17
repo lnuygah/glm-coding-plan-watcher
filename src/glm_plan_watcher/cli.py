@@ -45,7 +45,10 @@ def login(
     cfg = load_config(config)
     cfg.headless = False
     setup_logging(cfg.log_dir)
-    asyncio.run(_login(cfg))
+    try:
+        asyncio.run(_login(cfg))
+    except KeyboardInterrupt:
+        typer.echo("已结束登录流程；登录态保存在 user_data_dir。")
 
 
 @app.command()
@@ -103,8 +106,18 @@ def debug_selectors(
 async def _login(config: AppConfig) -> None:
     async with BrowserSession(config, make_storage(config)) as session:
         await session.goto(config.url)
-        typer.echo("浏览器已打开。请手动登录，完成后回到终端按 Enter。")
-        typer.prompt("", default="", show_default=False)
+        context = session.context
+        typer.echo(
+            "浏览器已打开。请在浏览器中手动登录；\n"
+            "完成后【直接关闭浏览器窗口】即可保存登录态（也可在此终端按 Ctrl+C 结束）。"
+        )
+        # 不依赖 stdin（在 `!`/管道等非交互环境下 typer.prompt 会立即 Aborted）。
+        # 改为等待用户关闭浏览器：持久化 context 关闭时登录态已写入 user_data_dir。
+        closed = asyncio.Event()
+        if context is not None:
+            context.on("close", lambda *_: closed.set())
+        await closed.wait()
+    typer.echo("登录流程结束，登录态已保存到 user_data_dir。")
 
 
 async def _check_once(config: AppConfig) -> CheckResult:

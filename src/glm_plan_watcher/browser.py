@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,10 +76,13 @@ class BrowserSession:
                     await self.context.tracing.stop(path=self._trace_path)
                 except Exception:
                     self._trace_path = None
-            await self.context.close()
+            # 用户可能已手动关闭浏览器窗口（持久化 context 随之关闭），忽略重复关闭错误。
+            with suppress(Exception):
+                await self.context.close()
             self.context = None
         if self.playwright is not None:
-            await self.playwright.stop()
+            with suppress(Exception):
+                await self.playwright.stop()
             self.playwright = None
 
     def require_page(self) -> Page:
