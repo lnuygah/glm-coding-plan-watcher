@@ -14,6 +14,7 @@ from glm_plan_watcher.daemon.supervisor import (
     WorkerSupervisor,
 )
 from glm_plan_watcher.db import Repository
+from glm_plan_watcher.models import WatchEvent
 
 
 class FakeProcess:
@@ -89,7 +90,12 @@ def test_supervisor_materializes_clamped_worker_config(tmp_path: Path) -> None:
     assert data["headless"] is True
     assert data["refresh_interval_seconds"] == 30.0
     assert data["refresh_jitter_seconds"] == 5.0
-    assert data["targets"] == [{"billing_cycle": "monthly", "tier": "Pro"}]
+    assert data["auto_click_entry"] is False
+    assert data["dry_run"] is False
+    assert data["targets"][0]["billing_cycle"] == "monthly"
+    assert data["targets"][0]["tier"] == "Pro"
+    assert data["targets"][0]["active_interval_seconds"] == 3.0
+    assert data["targets"][0]["dry_run"] is False
 
 
 @pytest.mark.asyncio
@@ -190,6 +196,81 @@ async def test_handoff_can_request_entry_click_without_payment_automation(tmp_pa
 
     headful_factory.processes[0].finish(0)
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_auto_handoff_stops_headless_worker_after_available_hit(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    headless_factory = FakeProcessFactory()
+    headful_factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(
+        repo,
+        EventBroadcaster(),
+        process_factory=headless_factory,
+        headful_launcher=headful_factory,
+    )
+
+    await supervisor.start_worker(account_id)
+    await supervisor._handle_worker_event(  # noqa: SLF001 - targeted supervisor behavior test
+        account_id,
+        WatchEvent(
+            type="hit",
+            check_index=1,
+            target="连续包月 / Pro",
+            button_state="available",
+            available=True,
+        ),
+        1,
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert headless_factory.processes[0].returncode == 0
+    assert len(headful_factory.commands) == 1
+    assert "--click-entry" in headful_factory.commands[0]
+
+    headful_factory.processes[0].finish(0)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_auto_handoff_skips_dry_run_target(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account = repo.create_account("main", str(tmp_path / "profile"))
+    repo.create_target(
+        account["id"],
+        billing_cycle="monthly",
+        tier="Pro",
+        dry_run=True,
+    )
+    account_id = int(account["id"])
+    headless_factory = FakeProcessFactory()
+    headful_factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(
+        repo,
+        EventBroadcaster(),
+        process_factory=headless_factory,
+        headful_launcher=headful_factory,
+    )
+
+    await supervisor.start_worker(account_id)
+    await supervisor._handle_worker_event(  # noqa: SLF001 - targeted supervisor behavior test
+        account_id,
+        WatchEvent(
+            type="hit",
+            check_index=1,
+            target="连续包月 / Pro",
+            button_state="available",
+            available=True,
+        ),
+        1,
+    )
+    await asyncio.sleep(0)
+
+    assert headful_factory.commands == []
+
+    await supervisor.stop_worker(account_id)
 
 
 @pytest.mark.asyncio

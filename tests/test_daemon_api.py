@@ -82,7 +82,19 @@ def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
     target = client.post(
         f"/accounts/{account['id']}/targets",
         headers=AUTH_HEADERS,
-        json={"billing_cycle": "monthly", "tier": "Pro", "interval": 60, "jitter": 20},
+        json={
+            "billing_cycle": "monthly",
+            "tier": "Pro",
+            "interval": 60,
+            "jitter": 20,
+            "active_window_start": "10:00",
+            "active_window_end": "10:30",
+            "active_timezone": "Asia/Shanghai",
+            "active_interval_seconds": 3,
+            "active_jitter_seconds": 1,
+            "idle_interval_seconds": 600,
+            "on_hit_handoff": True,
+        },
     ).json()
     event = WatchEvent(
         check_index=1,
@@ -99,12 +111,24 @@ def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
     )
     assert client.get(f"/targets/{target['id']}", headers=AUTH_HEADERS).json()["tier"] == "Pro"
     assert (
+        client.get(f"/targets/{target['id']}", headers=AUTH_HEADERS).json()[
+            "active_window_start"
+        ]
+        == "10:00"
+    )
+    assert (
         client.patch(
             f"/targets/{target['id']}",
             headers=AUTH_HEADERS,
-            json={"enabled": False},
+            json={"enabled": False, "active_interval_seconds": 4},
         ).json()["enabled"]
         is False
+    )
+    assert (
+        client.get(f"/targets/{target['id']}", headers=AUTH_HEADERS).json()[
+            "active_interval_seconds"
+        ]
+        == 4
     )
     assert (
         client.get(

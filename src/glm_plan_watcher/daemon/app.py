@@ -108,6 +108,13 @@ def create_app(
                 jitter=payload.jitter,
                 dry_run=payload.dry_run,
                 auto_click_entry=payload.auto_click_entry,
+                active_window_start=payload.active_window_start,
+                active_window_end=payload.active_window_end,
+                active_timezone=payload.active_timezone,
+                active_interval_seconds=payload.active_interval_seconds,
+                active_jitter_seconds=payload.active_jitter_seconds,
+                idle_interval_seconds=payload.idle_interval_seconds,
+                on_hit_handoff=payload.on_hit_handoff,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

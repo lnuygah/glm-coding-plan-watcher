@@ -11,7 +11,17 @@ from typing import Any
 
 from glm_plan_watcher.models import WatchEvent
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+_TARGET_COLUMN_ADDITIONS = {
+    "active_window_start": "TEXT NOT NULL DEFAULT ''",
+    "active_window_end": "TEXT NOT NULL DEFAULT ''",
+    "active_timezone": "TEXT NOT NULL DEFAULT ''",
+    "active_interval_seconds": "REAL NOT NULL DEFAULT 3",
+    "active_jitter_seconds": "REAL NOT NULL DEFAULT 1",
+    "idle_interval_seconds": "REAL NOT NULL DEFAULT 600",
+    "on_hit_handoff": "INTEGER NOT NULL DEFAULT 1",
+}
 
 
 class Repository:
@@ -77,7 +87,14 @@ class Repository:
                     interval REAL NOT NULL DEFAULT 90,
                     jitter REAL NOT NULL DEFAULT 30,
                     dry_run INTEGER NOT NULL DEFAULT 0,
-                    auto_click_entry INTEGER NOT NULL DEFAULT 1
+                    auto_click_entry INTEGER NOT NULL DEFAULT 1,
+                    active_window_start TEXT NOT NULL DEFAULT '',
+                    active_window_end TEXT NOT NULL DEFAULT '',
+                    active_timezone TEXT NOT NULL DEFAULT '',
+                    active_interval_seconds REAL NOT NULL DEFAULT 3,
+                    active_jitter_seconds REAL NOT NULL DEFAULT 1,
+                    idle_interval_seconds REAL NOT NULL DEFAULT 600,
+                    on_hit_handoff INTEGER NOT NULL DEFAULT 1
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -113,10 +130,17 @@ class Repository:
                 );
                 """
             )
+            self._ensure_target_columns(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
             )
+
+    def _ensure_target_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(targets)").fetchall()}
+        for column, ddl in _TARGET_COLUMN_ADDITIONS.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE targets ADD COLUMN {column} {ddl}")
 
     def create_account(
         self,
@@ -143,8 +167,13 @@ class Repository:
     def get_account(self, account_id: int, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
         owns_conn = conn is None
         if conn is None:
-            conn = sqlite3.connect(self.path)
-            conn.row_factory = sqlite3.Row
+            if self._shared is not None:
+                # :memory: 模式必须复用常驻连接，否则裸开会得到一个空库（no such table）。
+                conn = self._shared
+                owns_conn = False
+            else:
+                conn = sqlite3.connect(self.path)
+                conn.row_factory = sqlite3.Row
         try:
             row = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
             if row is None:
@@ -181,15 +210,24 @@ class Repository:
         jitter: float = 30.0,
         dry_run: bool = False,
         auto_click_entry: bool = True,
+        active_window_start: str = "",
+        active_window_end: str = "",
+        active_timezone: str = "",
+        active_interval_seconds: float = 3.0,
+        active_jitter_seconds: float = 1.0,
+        idle_interval_seconds: float = 600.0,
+        on_hit_handoff: bool = True,
     ) -> dict[str, Any]:
         with self.connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO targets(
                     account_id, billing_cycle, tier, enabled, interval, jitter, dry_run,
-                    auto_click_entry
+                    auto_click_entry, active_window_start, active_window_end, active_timezone,
+                    active_interval_seconds, active_jitter_seconds, idle_interval_seconds,
+                    on_hit_handoff
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     account_id,
@@ -200,6 +238,13 @@ class Repository:
                     jitter,
                     int(dry_run),
                     int(auto_click_entry),
+                    active_window_start,
+                    active_window_end,
+                    active_timezone,
+                    active_interval_seconds,
+                    active_jitter_seconds,
+                    idle_interval_seconds,
+                    int(on_hit_handoff),
                 ),
             )
             return self.get_target(cursor.lastrowid, conn=conn)
@@ -220,8 +265,13 @@ class Repository:
     def get_target(self, target_id: int, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
         owns_conn = conn is None
         if conn is None:
-            conn = sqlite3.connect(self.path)
-            conn.row_factory = sqlite3.Row
+            if self._shared is not None:
+                # :memory: 模式必须复用常驻连接，否则裸开会得到一个空库（no such table）。
+                conn = self._shared
+                owns_conn = False
+            else:
+                conn = sqlite3.connect(self.path)
+                conn.row_factory = sqlite3.Row
         try:
             row = conn.execute("SELECT * FROM targets WHERE id = ?", (target_id,)).fetchone()
             if row is None:
@@ -240,6 +290,13 @@ class Repository:
             "jitter",
             "dry_run",
             "auto_click_entry",
+            "active_window_start",
+            "active_window_end",
+            "active_timezone",
+            "active_interval_seconds",
+            "active_jitter_seconds",
+            "idle_interval_seconds",
+            "on_hit_handoff",
         }
         updates = {key: _sqlite_bool(value) for key, value in fields.items() if key in allowed}
         if updates:
@@ -394,8 +451,13 @@ class Repository:
     ) -> dict[str, Any] | None:
         owns_conn = conn is None
         if conn is None:
-            conn = sqlite3.connect(self.path)
-            conn.row_factory = sqlite3.Row
+            if self._shared is not None:
+                # :memory: 模式必须复用常驻连接，否则裸开会得到一个空库（no such table）。
+                conn = self._shared
+                owns_conn = False
+            else:
+                conn = sqlite3.connect(self.path)
+                conn.row_factory = sqlite3.Row
         try:
             row = conn.execute("SELECT * FROM workers WHERE account_id = ?", (account_id,)).fetchone()
             return _row_dict(row) if row is not None else None
@@ -419,7 +481,7 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def _normalize_bool_fields(row: sqlite3.Row) -> dict[str, Any]:
     data = _row_dict(row)
-    for key in ("enabled", "dry_run", "auto_click_entry", "available"):
+    for key in ("enabled", "dry_run", "auto_click_entry", "on_hit_handoff", "available"):
         if key in data:
             data[key] = bool(data[key])
     return data

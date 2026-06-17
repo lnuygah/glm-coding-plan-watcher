@@ -16,6 +16,13 @@ def test_repository_account_target_event_crud(tmp_path: Path) -> None:
         tier="Pro",
         interval=45,
         jitter=12,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        active_interval_seconds=3,
+        active_jitter_seconds=1,
+        idle_interval_seconds=600,
+        on_hit_handoff=True,
     )
     event = WatchEvent(
         check_index=1,
@@ -38,6 +45,8 @@ def test_repository_account_target_event_crud(tmp_path: Path) -> None:
     updated = repo.update_target(target["id"], enabled=False, dry_run=True)
     assert updated["enabled"] is False
     assert updated["dry_run"] is True
+    assert updated["active_window_start"] == "10:00"
+    assert updated["on_hit_handoff"] is True
 
     worker = repo.upsert_worker(account["id"], pid=123, status="running", started_at="now")
     assert worker["pid"] == 123

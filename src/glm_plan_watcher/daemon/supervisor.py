@@ -91,6 +91,7 @@ class WorkerSupervisor:
         self._handles: dict[int, WorkerHandle] = {}
         self._headful_handles: dict[int, HeadfulHandle] = {}
         self._restart_counts: dict[int, int] = {}
+        self._auto_handoff_tasks: set[asyncio.Task[None]] = set()
 
     async def start_worker(self, account_id: int) -> dict[str, object]:
         headful = self._headful_handles.get(account_id)
@@ -124,7 +125,13 @@ class WorkerSupervisor:
 
         if process.stdout is not None:
             handle.ingest_task = asyncio.create_task(
-                ingest_stream(process.stdout, self.repository, self.broadcaster, account_id)
+                ingest_stream(
+                    process.stdout,
+                    self.repository,
+                    self.broadcaster,
+                    account_id,
+                    on_event=self._handle_worker_event,
+                )
             )
         handle.monitor_task = asyncio.create_task(self._monitor_process(handle))
         return self.worker_status(account_id)
@@ -199,7 +206,18 @@ class WorkerSupervisor:
             "billing_cycle": first["billing_cycle"],
             "tier": first["tier"],
             "targets": [
-                {"billing_cycle": target["billing_cycle"], "tier": target["tier"]}
+                {
+                    "billing_cycle": target["billing_cycle"],
+                    "tier": target["tier"],
+                    "active_window_start": target["active_window_start"],
+                    "active_window_end": target["active_window_end"],
+                    "active_timezone": target["active_timezone"],
+                    "active_interval_seconds": target["active_interval_seconds"],
+                    "active_jitter_seconds": target["active_jitter_seconds"],
+                    "idle_interval_seconds": target["idle_interval_seconds"],
+                    "dry_run": target["dry_run"],
+                    "auto_click_entry": target["auto_click_entry"],
+                }
                 for target in targets
             ],
             "refresh_interval_seconds": interval,
@@ -208,8 +226,10 @@ class WorkerSupervisor:
             "headless": True,
             "user_data_dir": account["user_data_dir"],
             "enable_trace": False,
-            "auto_click_entry": all(bool(target["auto_click_entry"]) for target in targets),
-            "dry_run": any(bool(target["dry_run"]) for target in targets),
+            # Headless daemon workers only detect/report. Purchase entry clicks happen in
+            # explicit visible handoff sessions so the user can complete payment manually.
+            "auto_click_entry": False,
+            "dry_run": False,
             "notify": {"console": True, "desktop": False, "webhook_url": ""},
         }
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -377,6 +397,53 @@ class WorkerSupervisor:
         )
         return event_id
 
+    async def _handle_worker_event(
+        self,
+        account_id: int,
+        event: WatchEvent,
+        _event_id: int,
+    ) -> None:
+        if event.type != "hit" or not event.available:
+            return
+
+        target = self._matching_target_row(account_id, event.target)
+        if target is None:
+            return
+        if not bool(target["on_hit_handoff"]) or bool(target["dry_run"]):
+            return
+
+        task = asyncio.create_task(
+            self._auto_handoff_after_hit(
+                account_id=account_id,
+                target_id=int(target["id"]),
+                click_entry=bool(target["auto_click_entry"]),
+            )
+        )
+        self._auto_handoff_tasks.add(task)
+        task.add_done_callback(self._auto_handoff_tasks.discard)
+
+    async def _auto_handoff_after_hit(
+        self,
+        account_id: int,
+        target_id: int,
+        click_entry: bool,
+    ) -> None:
+        try:
+            await self.start_handoff_session(
+                account_id,
+                target_id=target_id,
+                click_entry=click_entry,
+                restore_worker=False,
+            )
+        except Exception as exc:
+            await self._record_daemon_event(
+                account_id,
+                event_type="handoff",
+                action="skipped",
+                target=f"target:{target_id}",
+                message=f"auto handoff failed: {exc}",
+            )
+
     def _resolve_handoff_target(self, account_id: int, target_id: int | None) -> TargetSpec:
         if target_id is not None:
             row = self.repository.get_target(target_id)
@@ -395,6 +462,16 @@ class WorkerSupervisor:
             billing_cycle=BillingCycle(row["billing_cycle"]),
             tier=Tier(row["tier"]),
         )
+
+    def _matching_target_row(self, account_id: int, target_label: str) -> dict[str, object] | None:
+        for row in self.repository.list_targets(account_id=account_id, enabled_only=True):
+            spec = TargetSpec(
+                billing_cycle=BillingCycle(row["billing_cycle"]),
+                tier=Tier(row["tier"]),
+            )
+            if spec.describe() == target_label:
+                return row
+        return None
 
 
 async def _default_process_factory(command: Sequence[str]) -> ProcessLike:
