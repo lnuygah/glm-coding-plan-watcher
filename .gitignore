@@ -38,6 +38,9 @@ daemon.sqlite3
 daemon.sqlite3-*
 worker-configs/
 *.sqlite3
+daemon.handshake.json
+*.handshake.json
+handshake.json
 
 # Tauri / frontend / sidecar build outputs
 node_modules/

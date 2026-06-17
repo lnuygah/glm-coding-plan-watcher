@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated
 
@@ -106,10 +107,18 @@ def debug_selectors(
 @app.command()
 def serve(
     host: Annotated[str, typer.Option("--host", help="监听地址；默认仅本机")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port", help="监听端口")] = 8765,
+    port: Annotated[int, typer.Option("--port", help="监听端口；0 表示自动选择空闲端口")] = 8765,
     db_path: Annotated[Path, typer.Option("--db", help="SQLite 数据库路径")] = Path(
         "daemon.sqlite3"
     ),
+    token: Annotated[
+        str | None,
+        typer.Option("--token", help="daemon bearer token；未提供时使用环境变量或自动生成"),
+    ] = None,
+    handshake: Annotated[
+        Path | None,
+        typer.Option("--handshake", help="写出 {host, port, token} 的握手文件路径"),
+    ] = None,
 ) -> None:
     """启动本地 FastAPI daemon。"""
 
@@ -118,8 +127,32 @@ def serve(
     import uvicorn
 
     from glm_plan_watcher.daemon.app import create_app
+    from glm_plan_watcher.daemon.security import (
+        DaemonHandshake,
+        bind_server_socket,
+        default_handshake_path,
+        resolve_token,
+        write_handshake,
+    )
 
-    uvicorn.run(create_app(db_path=db_path), host=host, port=port)
+    server_socket = bind_server_socket(host, port)
+    resolved_port = int(server_socket.getsockname()[1])
+    resolved_token = resolve_token(token)
+    handshake_path = handshake or default_handshake_path()
+    write_handshake(
+        handshake_path,
+        DaemonHandshake(host=host, port=resolved_port, token=resolved_token),
+    )
+    config = uvicorn.Config(
+        create_app(db_path=db_path, token=resolved_token),
+        host=host,
+        port=resolved_port,
+    )
+    try:
+        uvicorn.Server(config).run(sockets=[server_socket])
+    finally:
+        with suppress(OSError):
+            server_socket.close()
 
 
 async def _login(config: AppConfig) -> None:

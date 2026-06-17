@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import JSONResponse
 
 from glm_plan_watcher.daemon.api_models import (
     AccountCreate,
@@ -16,6 +17,11 @@ from glm_plan_watcher.daemon.api_models import (
     TargetUpdate,
 )
 from glm_plan_watcher.daemon.ingest import EventBroadcaster
+from glm_plan_watcher.daemon.security import (
+    authorized_bearer,
+    authorized_ws_token,
+    resolve_token,
+)
 from glm_plan_watcher.daemon.supervisor import (
     ProfileInUseError,
     WorkerAlreadyRunningError,
@@ -29,15 +35,29 @@ def create_app(
     repository: Repository | None = None,
     broadcaster: EventBroadcaster | None = None,
     supervisor: WorkerSupervisor | None = None,
+    token: str | None = None,
 ) -> FastAPI:
     repo = repository or Repository(db_path)
     events = broadcaster or EventBroadcaster()
     workers = supervisor or WorkerSupervisor(repo, events)
+    daemon_token = resolve_token(token)
 
     app = FastAPI(title="GLM Plan Watcher Daemon")
     app.state.repository = repo
     app.state.broadcaster = events
     app.state.supervisor = workers
+    app.state.token = daemon_token
+
+    @app.middleware("http")
+    async def require_bearer_token(request: Request, call_next: Any) -> JSONResponse:
+        if request.url.path == "/health":
+            return await call_next(request)
+        if not authorized_bearer(request.headers.get("authorization"), daemon_token):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "missing or invalid bearer token"},
+            )
+        return await call_next(request)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -174,6 +194,13 @@ def create_app(
 
     @app.websocket("/ws/events")
     async def websocket_events(websocket: WebSocket, account_id: int | None = None) -> None:
+        if not authorized_ws_token(
+            websocket.query_params.get("token"),
+            websocket.headers.get("sec-websocket-protocol"),
+            daemon_token,
+        ):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
         await websocket.accept()
         try:
             async with events.subscribe(account_id=account_id) as queue:

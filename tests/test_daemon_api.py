@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from glm_plan_watcher.daemon.app import create_app
 from glm_plan_watcher.daemon.ingest import EventBroadcaster
+from glm_plan_watcher.daemon.security import DaemonHandshake, write_handshake
 from glm_plan_watcher.db import Repository
 from glm_plan_watcher.models import WatchEvent
+
+TOKEN = "test-token"
+AUTH_HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 
 class FakeSupervisor:
@@ -60,15 +66,22 @@ def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "daemon.sqlite3")
     supervisor = FakeSupervisor()
     client = TestClient(
-        create_app(repository=repo, broadcaster=EventBroadcaster(), supervisor=supervisor)  # type: ignore[arg-type]
+        create_app(  # type: ignore[arg-type]
+            repository=repo,
+            broadcaster=EventBroadcaster(),
+            supervisor=supervisor,
+            token=TOKEN,
+        )
     )
 
     account = client.post(
         "/accounts",
+        headers=AUTH_HEADERS,
         json={"display_name": "main", "user_data_dir": str(tmp_path / "profile")},
     ).json()
     target = client.post(
         f"/accounts/{account['id']}/targets",
+        headers=AUTH_HEADERS,
         json={"billing_cycle": "monthly", "tier": "Pro", "interval": 60, "jitter": 20},
     ).json()
     event = WatchEvent(
@@ -79,17 +92,48 @@ def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
     )
     repo.insert_event(account["id"], event)
 
-    assert client.get("/accounts").json()[0]["display_name"] == "main"
-    assert client.get(f"/accounts/{account['id']}/targets").json()[0]["id"] == target["id"]
-    assert client.get(f"/targets/{target['id']}").json()["tier"] == "Pro"
-    assert client.patch(f"/targets/{target['id']}", json={"enabled": False}).json()["enabled"] is False
-    assert client.get("/events", params={"account_id": account["id"]}).json()[0]["message"] == "sold out"
-    assert client.post(f"/accounts/{account['id']}/worker/start").json()["status"] == "running"
-    assert client.post(f"/accounts/{account['id']}/worker/stop").json()["status"] == "stopped"
-    assert client.post(f"/accounts/{account['id']}/login", json={}).json()["status"] == "login"
+    assert client.get("/accounts", headers=AUTH_HEADERS).json()[0]["display_name"] == "main"
+    assert (
+        client.get(f"/accounts/{account['id']}/targets", headers=AUTH_HEADERS).json()[0]["id"]
+        == target["id"]
+    )
+    assert client.get(f"/targets/{target['id']}", headers=AUTH_HEADERS).json()["tier"] == "Pro"
+    assert (
+        client.patch(
+            f"/targets/{target['id']}",
+            headers=AUTH_HEADERS,
+            json={"enabled": False},
+        ).json()["enabled"]
+        is False
+    )
+    assert (
+        client.get(
+            "/events",
+            headers=AUTH_HEADERS,
+            params={"account_id": account["id"]},
+        ).json()[0]["message"]
+        == "sold out"
+    )
+    assert (
+        client.post(f"/accounts/{account['id']}/worker/start", headers=AUTH_HEADERS).json()[
+            "status"
+        ]
+        == "running"
+    )
+    assert (
+        client.post(f"/accounts/{account['id']}/worker/stop", headers=AUTH_HEADERS).json()["status"]
+        == "stopped"
+    )
+    assert (
+        client.post(f"/accounts/{account['id']}/login", headers=AUTH_HEADERS, json={}).json()[
+            "status"
+        ]
+        == "login"
+    )
     assert (
         client.post(
             f"/accounts/{account['id']}/handoff",
+            headers=AUTH_HEADERS,
             json={"target_id": target["id"], "click_entry": False},
         ).json()["status"]
         == "handoff"
@@ -98,3 +142,41 @@ def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
     assert supervisor.stopped == [account["id"]]
     assert supervisor.logins == [(account["id"], False)]
     assert supervisor.handoffs == [(account["id"], target["id"], False, False)]
+
+
+def test_daemon_auth_and_health_exemption(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/accounts").status_code == 401
+    assert client.get("/accounts", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get("/accounts", headers=AUTH_HEADERS).status_code == 200
+
+
+def test_daemon_auto_generates_token_when_missing(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    app = create_app(repository=repo)
+
+    assert isinstance(app.state.token, str)
+    assert len(app.state.token) > 20
+
+
+def test_daemon_websocket_requires_token(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    with pytest.raises(WebSocketDisconnect), client.websocket_connect("/ws/events"):
+        pass
+
+    with client.websocket_connect(f"/ws/events?token={TOKEN}"):
+        pass
+
+
+def test_write_handshake_file(tmp_path: Path) -> None:
+    path = tmp_path / "daemon.handshake.json"
+
+    write_handshake(path, DaemonHandshake(host="127.0.0.1", port=12345, token=TOKEN))
+
+    assert path.read_text(encoding="utf-8").strip().startswith("{")
+    assert TOKEN in path.read_text(encoding="utf-8")
