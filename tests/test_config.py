@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from glm_plan_watcher.config import dump_default_yaml, load_config
+from glm_plan_watcher.models import BillingCycle, Tier
+
+
+def test_load_config_yaml(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        """
+billing_cycle: yearly
+tier: Max
+refresh_interval_seconds: 10
+notify:
+  console: false
+  webhook_url: "https://example.test/hook"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.billing_cycle is BillingCycle.yearly
+    assert config.tier is Tier.Max
+    assert config.refresh_interval_seconds == 10
+    assert config.notify.console is False
+    assert config.notify.webhook_url == "https://example.test/hook"
+
+
+def test_env_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("tier: Lite\nnotify:\n  webhook_url: https://yaml.example/hook\n", encoding="utf-8")
+    monkeypatch.setenv("GLM_WATCHER__TIER", "Pro")
+    monkeypatch.setenv("GLM_WATCHER__NOTIFY__WEBHOOK_URL", "https://env.example/hook")
+
+    config = load_config(path)
+
+    assert config.tier is Tier.Pro
+    assert config.notify.webhook_url == "https://env.example/hook"
+
+
+def test_dump_default_yaml_contains_safety_defaults() -> None:
+    text = dump_default_yaml()
+
+    assert "auto_click_entry: true" in text
+    assert "dry_run: false" in text
+    assert "最终支付必须人工确认" in text

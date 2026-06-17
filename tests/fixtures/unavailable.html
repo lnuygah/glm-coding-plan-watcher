@@ -1,0 +1,49 @@
+<!doctype html>
+<!--
+  假设不可用 fixture：用于覆盖 disabled 属性、aria-disabled、class disabled 等通用降级形态。
+  这些不是当前页面真实可购买态样本，后续需用 debug-selectors 校准。
+-->
+<html lang="zh-CN">
+  <body>
+    <div id="switchTabBox" class="switch-tab-box">
+      <div class="switch-tab-content">
+        <div class="switch-tab-item active">
+          <div class="switch-tab-item-content"><span>连续包月</span></div>
+        </div>
+        <div class="switch-tab-item">
+          <div class="switch-tab-item-content"><span>连续包季</span></div>
+        </div>
+        <div class="switch-tab-item">
+          <div class="switch-tab-item-content"><span>连续包年</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="package-list glm-coding-package-list">
+      <div class="package-card-box">
+        <div class="package-card">
+          <div class="package-card-title"><span class="font-prompt">Lite</span></div>
+          <div class="package-card-btn-box">
+            <button disabled="disabled" class="el-button buy-btn el-button--primary" name="处理中"><span>处理中</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="package-card-box">
+        <div class="package-card">
+          <div class="package-card-title"><span class="font-prompt">Pro</span></div>
+          <div class="package-card-btn-box">
+            <button aria-disabled="true" class="el-button buy-btn el-button--primary" name="处理中"><span>处理中</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="package-card-box">
+        <div class="package-card">
+          <div class="package-card-title"><span class="font-prompt">Max</span></div>
+          <div class="package-card-btn-box">
+            <button class="el-button buy-btn el-button--primary is-disabled disabled" name="处理中"><span>处理中</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,49 @@
+<!doctype html>
+<!--
+  假设可购买 fixture：当前没有真实可购买样本。
+  这里按页面结构移除 disabled，并假设按钮文案为「立即订阅/立即购买」；上线后需用 debug-selectors 校准。
+-->
+<html lang="zh-CN">
+  <body>
+    <div id="switchTabBox" class="switch-tab-box">
+      <div class="switch-tab-content">
+        <div class="switch-tab-item active">
+          <div class="switch-tab-item-content"><span>连续包月</span></div>
+        </div>
+        <div class="switch-tab-item">
+          <div class="switch-tab-item-content"><span>连续包季</span></div>
+        </div>
+        <div class="switch-tab-item">
+          <div class="switch-tab-item-content"><span>连续包年</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="package-list glm-coding-package-list">
+      <div class="package-card-box">
+        <div class="package-card">
+          <div class="package-card-title"><span class="font-prompt">Lite</span></div>
+          <div class="package-card-btn-box">
+            <button class="el-button buy-btn el-button--primary" name="立即购买"><span>立即购买</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="package-card-box">
+        <div class="package-card">
+          <div class="package-card-title"><span class="font-prompt">Pro</span></div>
+          <div class="package-card-btn-box">
+            <button class="el-button buy-btn el-button--primary" name="立即订阅"><span>立即订阅</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="package-card-box">
+        <div class="package-card">
+          <div class="package-card-title"><span class="font-prompt">Max</span></div>
+          <div class="package-card-btn-box">
+            <button class="el-button buy-btn el-button--primary" name="开通"><span>开通</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
