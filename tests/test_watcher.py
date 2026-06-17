@@ -14,13 +14,33 @@ from glm_plan_watcher.watcher import AccountWatcher
 
 
 class FakeDetector(DetectorStrategy):
-    def __init__(self, state: ButtonState = ButtonState.sold_out) -> None:
+    def __init__(
+        self,
+        state: ButtonState = ButtonState.sold_out,
+        button_text: str = "",
+    ) -> None:
         self.state = state
+        self.button_text = button_text
         self.calls: list[TargetSpec] = []
 
     async def detect(self, page: Page, target: TargetSpec) -> CheckResult:
         self.calls.append(target)
-        return CheckResult(target=target, state=self.state, reason="fake result")
+        return CheckResult(
+            target=target,
+            state=self.state,
+            button_text=self.button_text,
+            reason="fake result",
+        )
+
+
+class RecordingScheduler:
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+        self.results: list[CheckResult] = []
+
+    def next_delay(self, results: list[CheckResult]) -> float:
+        self.results = list(results)
+        return self.delay
 
 
 @pytest.mark.asyncio
@@ -69,6 +89,30 @@ async def test_account_watcher_emits_heartbeat_for_single_target() -> None:
     assert events[-1]["type"] == "heartbeat"
     assert events[-1]["target"] == "连续包季 / Pro"
     assert events[-1]["message"] == "max checks reached"
+
+
+@pytest.mark.asyncio
+async def test_account_watcher_uses_scheduler_policy_for_delay() -> None:
+    output = StringIO()
+    scheduler = RecordingScheduler(delay=42)
+    config = AppConfig(max_checks=2)
+    watcher = AccountWatcher(
+        config,
+        detector=FakeDetector(button_text="06月18日 10:00 补货"),
+        stdout=output,
+        scheduler_policy=scheduler,  # type: ignore[arg-type]
+    )
+
+    async def stop_after_emit(_delay: float) -> bool:
+        return True
+
+    watcher._sleep_or_stop = stop_after_emit  # type: ignore[method-assign]
+    await watcher.monitor(page=object(), session=None)
+
+    events = _json_lines(output)
+    assert scheduler.results[0].button_text == "06月18日 10:00 补货"
+    assert events[0]["next_refresh_at"] is not None
+    assert events[1]["type"] == "heartbeat"
 
 
 def _json_lines(output: StringIO) -> list[dict[str, Any]]:
