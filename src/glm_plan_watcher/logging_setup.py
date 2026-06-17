@@ -6,6 +6,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from rich.console import Console
 from rich.logging import RichHandler
 
 LOGGER_NAME = "glm_plan_watcher"
@@ -35,7 +36,9 @@ def setup_logging(log_dir: Path, verbose: bool = False) -> logging.Logger:
         )
     )
 
+    # 人类可读日志走 stderr，保持 stdout 仅有 watch 的 WatchEvent JSON 行（父进程契约）。
     rich_handler = RichHandler(
+        console=Console(stderr=True),
         show_time=True,
         show_path=False,
         rich_tracebacks=True,
