@@ -254,7 +254,37 @@ class WorkerSupervisor:
         self.repository.update_account(account_id, status="stopped")
         return self.worker_status(account_id)
 
-    async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
+    async def discard_account(self, account_id: int) -> None:
+        """Stop every in-memory process/task for an account before deleting it from SQLite."""
+
+        worker = self._handles.get(account_id)
+        worker_monitor = worker.monitor_task if worker is not None else None
+        await self.stop_worker(account_id)
+        if worker_monitor is not None and worker_monitor is not asyncio.current_task():
+            worker_monitor.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker_monitor
+
+        headful = self._headful_handles.pop(account_id, None)
+        if headful is not None:
+            headful.restore_worker = False
+            if headful.monitor_task is not None:
+                headful.monitor_task.cancel()
+            await self._terminate_process(headful.process)
+            if headful.monitor_task is not None:
+                with suppress(asyncio.CancelledError):
+                    await headful.monitor_task
+
+        self._starting.discard(account_id)
+        spawn_task = self._spawn_tasks_by_account.get(account_id)
+        if spawn_task is not None:
+            with suppress(asyncio.CancelledError):
+                await spawn_task
+        self._spawn_tasks_by_account.pop(account_id, None)
+        self._handles.pop(account_id, None)
+        self._restart_counts.pop(account_id, None)
+
+    async def _terminate_process(self, process: ProcessLike) -> None:
         """终止子进程并回收：先 terminate，超时再 kill，始终 await wait，避免遗留僵尸进程。"""
 
         if process.returncode is not None:

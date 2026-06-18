@@ -39,6 +39,13 @@ const translations = {
     handoffButtonTitle: "用可见浏览器接管去付款：打开可见浏览器，最多点击一次购买入口；最终支付必须人工确认。",
     saveButton: "保存",
     deleteButton: "删除",
+    deleteAccountButton: "删除账号",
+    deleteAccountConfirm:
+      "确认删除账号「{name}」？此操作不可恢复，正在进行的监控会被停止。",
+    deleteAccountConfirmYes: "确认删除",
+    cancelButton: "取消",
+    purgeProfileLabel: "同时删除浏览器数据（登录态，不可恢复）",
+    deleteAccountFailed: "删除账号失败",
     enabledStatus: "启用",
     disabledStatus: "停用",
     billingLabel: "计费周期",
@@ -135,6 +142,13 @@ const translations = {
     handoffButtonTitle: "Take over payment in a visible browser: opens a visible browser and may click the purchase entry once; final payment is manual.",
     saveButton: "Save",
     deleteButton: "Delete",
+    deleteAccountButton: "Delete account",
+    deleteAccountConfirm:
+      'Delete account "{name}"? This cannot be undone, and any running monitor will be stopped.',
+    deleteAccountConfirmYes: "Delete",
+    cancelButton: "Cancel",
+    purgeProfileLabel: "Also delete browser data (login session, irreversible)",
+    deleteAccountFailed: "Delete account failed",
     enabledStatus: "enabled",
     disabledStatus: "disabled",
     billingLabel: "Billing",
@@ -249,6 +263,23 @@ const actionKeys = {
   stop: "stopButton",
   login: "loginButton",
   handoff: "handoffButton",
+  deleteaccount: "deleteAccountButton",
+};
+
+const NEW_TARGET_DEFAULTS = {
+  active_window_start: "10:00",
+  active_window_end: "10:30",
+  active_timezone: "Asia/Shanghai",
+  active_interval_seconds: 3,
+  active_jitter_seconds: 1,
+  auto_click_entry: true,
+  dry_run: false,
+  enabled: true,
+  idle_interval_seconds: 600,
+  interval: 90,
+  jitter: 30,
+  on_hit_handoff: true,
+  visible_in_window: false,
 };
 
 let ws = null;
@@ -388,6 +419,7 @@ function renderAccount(account, targets) {
     <div class="actions">
       ${accountActionsMarkup(status, hasTargets)}
     </div>
+    <div class="delete-confirm" hidden></div>
     <div class="targets"></div>
     <details class="add-target"${hasTargets ? "" : " open"}>
       <summary>${escapeHtml(t("addMonitorTask"))}</summary>
@@ -432,8 +464,15 @@ function renderAccount(account, targets) {
         }
         return;
       }
+      if (action === "deleteaccount") {
+        showDeleteAccountConfirm(row, account);
+        return;
+      }
       await withUiError(t("actionFailed", { action: actionText(action) }), async () => {
-        if (action === "start") await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
+        if (action === "start") {
+          await saveTargetForms(row);
+          await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
+        }
         if (action === "stop") await api(`/accounts/${account.id}/worker/stop`, { method: "POST" });
         if (action === "login") {
           await api(`/accounts/${account.id}/login`, { method: "POST", body: "{}" });
@@ -458,10 +497,14 @@ function renderAccount(account, targets) {
 function accountActionsMarkup(status, hasTargets) {
   const buttons = [];
   const seen = new Set();
-  const add = (action, labelKey, { primary = false, titleKey, disabled = false } = {}) => {
+  const add = (
+    action,
+    labelKey,
+    { primary = false, titleKey, disabled = false, danger = false } = {},
+  ) => {
     if (seen.has(action)) return;
     seen.add(action);
-    const cls = primary ? "primary-action" : "secondary-action";
+    const cls = `${primary ? "primary-action" : "secondary-action"}${danger ? " danger-action" : ""}`;
     const title = titleKey ? ` title="${escapeAttr(t(titleKey))}"` : "";
     const dis = disabled ? " disabled" : "";
     buttons.push(
@@ -492,8 +535,50 @@ function accountActionsMarkup(status, hasTargets) {
   if (hasTargets && !monitoring) add("start", "startButton");
   if (monitoring) add("stop", "stopButton");
   add("handoff", "handoffButton", { titleKey: "handoffButtonTitle" });
+  add("deleteaccount", "deleteAccountButton", { danger: true });
 
   return buttons.join("");
+}
+
+function showDeleteAccountConfirm(row, account) {
+  const confirm = row.querySelector(".delete-confirm");
+  confirm.replaceChildren();
+  confirm.hidden = false;
+
+  const message = document.createElement("p");
+  message.textContent = t("deleteAccountConfirm", { name: account.display_name });
+
+  const purgeLabel = document.createElement("label");
+  const purge = document.createElement("input");
+  purge.type = "checkbox";
+  purgeLabel.append(purge, document.createTextNode(t("purgeProfileLabel")));
+
+  const actions = document.createElement("div");
+  actions.className = "delete-confirm-actions";
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "button";
+  confirmButton.className = "danger-action";
+  confirmButton.textContent = t("deleteAccountConfirmYes");
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.textContent = t("cancelButton");
+  actions.append(confirmButton, cancelButton);
+
+  confirmButton.addEventListener("click", async () => {
+    await withUiError(t("deleteAccountFailed"), async () => {
+      await api(`/accounts/${account.id}?purge_profile=${String(purge.checked)}`, {
+        method: "DELETE",
+      });
+      authRequiredAccounts.delete(account.id);
+      await loadAccounts();
+    });
+  });
+  cancelButton.addEventListener("click", () => {
+    confirm.hidden = true;
+    confirm.replaceChildren();
+  });
+
+  confirm.append(message, purgeLabel, actions);
 }
 
 function renderTarget(account, target) {
@@ -504,7 +589,7 @@ function renderTarget(account, target) {
       <strong>${escapeHtml(billingDisplayLabel(target.billing_cycle))} / ${escapeHtml(target.tier)}</strong>
       <span>${target.enabled ? escapeHtml(t("enabledStatus")) : escapeHtml(t("disabledStatus"))}</span>
     </div>
-    <form class="target-edit-form">
+    <form class="target-edit-form" data-target-id="${escapeAttr(String(target.id))}">
       ${targetFormFields(target)}
       <div class="target-actions">
         <button type="submit">${escapeHtml(t("saveButton"))}</button>
@@ -519,10 +604,7 @@ function renderTarget(account, target) {
   item.querySelector(".target-edit-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     await withUiError(t("saveTargetFailed"), async () => {
-      await api(`/targets/${target.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
-      });
+      await saveTargetForm(event.currentTarget);
       await loadAccounts();
     });
   });
@@ -551,7 +633,23 @@ function renderTarget(account, target) {
   return item;
 }
 
-function targetFormFields(target = {}) {
+async function saveTargetForms(root) {
+  for (const form of root.querySelectorAll(".target-edit-form")) {
+    await saveTargetForm(form);
+  }
+}
+
+async function saveTargetForm(form) {
+  const targetId = form.dataset.targetId;
+  if (!targetId) return;
+  await api(`/targets/${targetId}`, {
+    method: "PATCH",
+    body: JSON.stringify(targetPayloadFromForm(form)),
+  });
+}
+
+function targetFormFields(target = null) {
+  const values = target ?? NEW_TARGET_DEFAULTS;
   return `
     <div class="form-grid">
       <label>
@@ -572,49 +670,49 @@ function targetFormFields(target = {}) {
       </label>
       <label>
         ${escapeHtml(t("windowStartLabel"))}
-        <input name="active_window_start" placeholder="10:00" value="${escapeAttr(target.active_window_start || "")}" />
+        <input name="active_window_start" placeholder="10:00" value="${escapeAttr(values.active_window_start ?? "")}" />
       </label>
       <label>
         ${escapeHtml(t("windowEndLabel"))}
-        <input name="active_window_end" placeholder="10:30" value="${escapeAttr(target.active_window_end || "")}" />
+        <input name="active_window_end" placeholder="10:30" value="${escapeAttr(values.active_window_end ?? "")}" />
       </label>
     </div>
     <div class="checkbox-row">
-      ${checkbox("enabled", target.enabled ?? true, t("enabledLabel"))}
-      ${checkbox("visible_in_window", target.visible_in_window ?? false, t("visibleInWindowLabel"))}
-      ${checkbox("on_hit_handoff", target.on_hit_handoff ?? true, t("openHandoffLabel"))}
+      ${checkbox("enabled", values.enabled ?? true, t("enabledLabel"))}
+      ${checkbox("visible_in_window", values.visible_in_window ?? false, t("visibleInWindowLabel"))}
+      ${checkbox("on_hit_handoff", values.on_hit_handoff ?? true, t("openHandoffLabel"))}
     </div>
     <details class="advanced-target">
       <summary>${escapeHtml(t("advancedSettingsLabel"))}</summary>
       <div class="form-grid">
         <label>
           ${escapeHtml(t("baseIntervalLabel"))}
-          <input name="interval" type="number" min="1" step="1" value="${numberValue(target.interval, 90)}" />
+          <input name="interval" type="number" min="1" step="1" value="${numberValue(values.interval, 90)}" />
         </label>
         <label>
           ${escapeHtml(t("baseJitterLabel"))}
-          <input name="jitter" type="number" min="0" step="1" value="${numberValue(target.jitter, 30)}" />
+          <input name="jitter" type="number" min="0" step="1" value="${numberValue(values.jitter, 30)}" />
         </label>
         <label>
           ${escapeHtml(t("timezoneLabel"))}
-          <input name="active_timezone" placeholder="${escapeAttr(t("timezonePlaceholder"))}" value="${escapeAttr(target.active_timezone || "")}" />
+          <input name="active_timezone" placeholder="${escapeAttr(t("timezonePlaceholder"))}" value="${escapeAttr(values.active_timezone ?? "")}" />
         </label>
         <label>
           ${escapeHtml(t("activeIntervalLabel"))}
-          <input name="active_interval_seconds" type="number" min="1" step="0.5" value="${numberValue(target.active_interval_seconds, 3)}" />
+          <input name="active_interval_seconds" type="number" min="1" step="0.5" value="${numberValue(values.active_interval_seconds, 3)}" />
         </label>
         <label>
           ${escapeHtml(t("activeJitterLabel"))}
-          <input name="active_jitter_seconds" type="number" min="0" step="0.5" value="${numberValue(target.active_jitter_seconds, 1)}" />
+          <input name="active_jitter_seconds" type="number" min="0" step="0.5" value="${numberValue(values.active_jitter_seconds, 1)}" />
         </label>
         <label>
           ${escapeHtml(t("idleIntervalLabel"))}
-          <input name="idle_interval_seconds" type="number" min="1" step="1" value="${numberValue(target.idle_interval_seconds, 600)}" />
+          <input name="idle_interval_seconds" type="number" min="1" step="1" value="${numberValue(values.idle_interval_seconds, 600)}" />
         </label>
       </div>
       <div class="checkbox-row">
-        ${checkbox("dry_run", target.dry_run ?? false, t("dryRunLabel"))}
-        ${checkbox("auto_click_entry", target.auto_click_entry ?? true, t("clickEntryLabel"))}
+        ${checkbox("dry_run", values.dry_run ?? false, t("dryRunLabel"))}
+        ${checkbox("auto_click_entry", values.auto_click_entry ?? true, t("clickEntryLabel"))}
       </div>
     </details>
   `;
