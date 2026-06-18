@@ -132,11 +132,14 @@ p {
 }
 
 .event-filter {
+  align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
-.event-filter button {
+.event-filter button,
+.event-account-filter select {
   background: #fff;
   color: #3a4350;
   font-size: 13px;
@@ -148,6 +151,14 @@ p {
   border-color: #1f6feb;
   color: #fff;
   font-weight: 600;
+}
+
+.event-account-filter {
+  align-items: center;
+  color: #5b6572;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
 }
 
 .form-row {
@@ -370,17 +381,55 @@ p {
 }
 
 .event-chip,
+.event-account,
 .event-target {
   border-radius: 999px;
   padding: 3px 8px;
 }
 
-.event-chip {
+.event-chip,
+.event-account {
   background: #eef2f6;
   color: #24292f;
   flex: 0 0 auto;
   font-size: 12px;
   font-weight: 700;
+}
+
+.event-account {
+  color: #24324a;
+}
+
+.event-account[data-account-color="0"] {
+  background: #e5f0ff;
+}
+
+.event-account[data-account-color="1"] {
+  background: #e4f6ed;
+}
+
+.event-account[data-account-color="2"] {
+  background: #fff1cc;
+}
+
+.event-account[data-account-color="3"] {
+  background: #f4e8ff;
+}
+
+.event-account[data-account-color="4"] {
+  background: #e7f5f7;
+}
+
+.event-account[data-account-color="5"] {
+  background: #ffe8e8;
+}
+
+.event-account[data-account-color="6"] {
+  background: #edf0f5;
+}
+
+.event-account[data-account-color="7"] {
+  background: #e9f7dc;
 }
 
 .event-target {

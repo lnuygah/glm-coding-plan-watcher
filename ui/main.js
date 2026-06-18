@@ -5,6 +5,7 @@ const eventsEl = document.querySelector("#events");
 const eventsEmptyEl = document.querySelector("#events-empty");
 const eventsFilterAllButton = document.querySelector("#events-filter-all");
 const eventsFilterImportantButton = document.querySelector("#events-filter-important");
+const eventsFilterAccountSelect = document.querySelector("#events-filter-account");
 const refreshButton = document.querySelector("#refresh");
 const accountForm = document.querySelector("#account-form");
 const statusEl = document.querySelector("#status");
@@ -82,6 +83,8 @@ const translations = {
     loadAccountsFailed: "加载账号失败",
     evtFilterAll: "全部",
     evtFilterImportant: "只看重要",
+    evtAccountFilterLabel: "账号",
+    evtAccountFilterAll: "全部账号",
     eventsEmpty: "暂无事件",
     evtRawToggle: "⌄ 原始",
     evtRefreshIn: "约 {seconds} 秒后刷新",
@@ -176,6 +179,8 @@ const translations = {
     loadAccountsFailed: "Load accounts failed",
     evtFilterAll: "All",
     evtFilterImportant: "Important",
+    evtAccountFilterLabel: "Account",
+    evtAccountFilterAll: "All accounts",
     eventsEmpty: "No events",
     evtRawToggle: "⌄ Raw",
     evtRefreshIn: "Refresh in about {seconds}s",
@@ -248,11 +253,13 @@ const actionKeys = {
 
 let ws = null;
 const accountTargets = new Map();
+const accountNames = new Map();
 // Login state is not exposed by the API; we only flag accounts that emitted an
 // auth_required event so we can surface a prominent "needs login" prompt.
 const authRequiredAccounts = new Set();
 const eventPayloads = [];
 let currentEventFilter = "all";
+let currentAccountFilter = "all";
 let currentLanguage = detectLanguage();
 
 function detectLanguage() {
@@ -352,11 +359,15 @@ async function loadAccounts() {
   const accounts = await api("/accounts");
   accountsEl.innerHTML = "";
   accountTargets.clear();
+  accountNames.clear();
   for (const account of accounts) {
     const targets = await api(`/accounts/${account.id}/targets`);
-    accountTargets.set(account.id, targets);
+    const accountId = accountIdValue(account.id);
+    accountTargets.set(accountId, targets);
+    accountNames.set(accountId, account.display_name);
     accountsEl.append(renderAccount(account, targets));
   }
+  refreshEventAccountFilter();
 }
 
 function renderAccount(account, targets) {
@@ -745,7 +756,13 @@ function renderEventCard(payload) {
   const item = document.createElement("article");
   const event = payload.event ?? {};
   const presentation = eventPresentation(event);
+  const accountId = accountIdValue(payload.account_id);
+  const accountName = eventAccountName(payload);
+  const accountColor = accountColorIndex(accountId);
+  const targetText = eventTargetText(event);
   item.className = `event-card evt--${presentation.severity}`;
+  item.dataset.accountId = accountId;
+  item.dataset.accountColor = String(accountColor);
   item.dataset.eventType = event.type || "unknown";
   item.dataset.important = String(isImportantEvent(event));
 
@@ -763,15 +780,23 @@ function renderEventCard(payload) {
   chip.className = "event-chip";
   chip.textContent = presentation.title;
 
-  const target = document.createElement("span");
-  target.className = "event-target";
-  target.textContent = event.target || t("evtFallbackTarget");
+  const account = document.createElement("span");
+  account.className = "event-account";
+  account.dataset.accountColor = String(accountColor);
+  account.textContent = accountName;
 
   const time = document.createElement("time");
   time.className = "event-time";
   time.textContent = eventLocalTime(event);
 
-  top.append(chip, target, time);
+  top.append(chip, account);
+  if (shouldShowTargetChip(targetText, accountName, accountId)) {
+    const target = document.createElement("span");
+    target.className = "event-target";
+    target.textContent = targetText;
+    top.append(target);
+  }
+  top.append(time);
 
   const bottom = document.createElement("div");
   bottom.className = "event-bottom";
@@ -813,6 +838,41 @@ function renderEventCard(payload) {
   body.append(top, bottom);
   item.append(icon, body);
   return item;
+}
+
+function accountIdValue(value) {
+  return value == null ? "" : String(value);
+}
+
+function eventAccountName(payload) {
+  const accountId = accountIdValue(payload.account_id);
+  return accountNames.get(accountId) || `#${accountId || "unknown"}`;
+}
+
+function eventTargetText(event) {
+  return String(event.target || "").trim();
+}
+
+function shouldShowTargetChip(targetText, accountName, accountId) {
+  if (!targetText) return false;
+  const accountFallbacks = new Set([
+    t("evtFallbackTarget"),
+    translations["zh-CN"].evtFallbackTarget,
+    translations.en.evtFallbackTarget,
+    accountName,
+    `#${accountId}`,
+  ]);
+  return !accountFallbacks.has(targetText);
+}
+
+const ACCOUNT_COLOR_COUNT = 8;
+
+function accountColorIndex(accountId) {
+  let hash = 0;
+  for (const char of accountId || "unknown") {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash % ACCOUNT_COLOR_COUNT;
 }
 
 const IMPORTANT_EVENT_TYPES = new Set(["hit", "error", "login", "handoff", "shutdown"]);
@@ -942,10 +1002,38 @@ function eventLocalTime(event) {
   });
 }
 
+function refreshEventAccountFilter() {
+  const previous = currentAccountFilter;
+  eventsFilterAccountSelect.replaceChildren();
+
+  const all = document.createElement("option");
+  all.value = "all";
+  all.textContent = t("evtAccountFilterAll");
+  eventsFilterAccountSelect.append(all);
+
+  let hasPrevious = previous === "all";
+  for (const [accountId, name] of accountNames) {
+    const option = document.createElement("option");
+    option.value = accountId;
+    option.textContent = name;
+    eventsFilterAccountSelect.append(option);
+    if (accountId === previous) {
+      hasPrevious = true;
+    }
+  }
+
+  currentAccountFilter = hasPrevious ? previous : "all";
+  eventsFilterAccountSelect.value = currentAccountFilter;
+  applyEventFilter();
+}
+
 function applyEventFilter() {
   let visibleCount = 0;
   for (const card of eventsEl.children) {
-    const visible = currentEventFilter === "all" || card.dataset.important === "true";
+    const matchesImportance = currentEventFilter === "all" || card.dataset.important === "true";
+    const matchesAccount =
+      currentAccountFilter === "all" || card.dataset.accountId === currentAccountFilter;
+    const visible = matchesImportance && matchesAccount;
     card.hidden = !visible;
     if (visible) visibleCount += 1;
   }
@@ -953,6 +1041,7 @@ function applyEventFilter() {
   eventsFilterImportantButton.dataset.active = String(currentEventFilter === "important");
   eventsFilterAllButton.setAttribute("aria-pressed", String(currentEventFilter === "all"));
   eventsFilterImportantButton.setAttribute("aria-pressed", String(currentEventFilter === "important"));
+  eventsFilterAccountSelect.value = currentAccountFilter;
   eventsEmptyEl.hidden = visibleCount > 0;
 }
 
@@ -985,7 +1074,7 @@ async function handoffForEvent(payload) {
 }
 
 function targetForEvent(payload) {
-  const targets = accountTargets.get(payload.account_id) ?? [];
+  const targets = accountTargets.get(accountIdValue(payload.account_id)) ?? [];
   return targets.find((target) => targetLabel(target) === payload.event?.target);
 }
 
@@ -1050,6 +1139,7 @@ languageSelect.addEventListener("change", () => {
   currentLanguage = languageSelect.value;
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, currentLanguage);
   applyI18n();
+  refreshEventAccountFilter();
   renderEvents();
   void withUiError(t("loadAccountsFailed"), loadAccounts);
 });
@@ -1061,8 +1151,13 @@ eventsFilterImportantButton.addEventListener("click", () => {
   currentEventFilter = "important";
   applyEventFilter();
 });
+eventsFilterAccountSelect.addEventListener("change", () => {
+  currentAccountFilter = eventsFilterAccountSelect.value || "all";
+  applyEventFilter();
+});
 
 applyI18n();
+refreshEventAccountFilter();
 applyEventFilter();
 await loadHandshake();
 connectEvents();
