@@ -469,7 +469,10 @@ function renderAccount(account, targets) {
         return;
       }
       await withUiError(t("actionFailed", { action: actionText(action) }), async () => {
-        if (action === "start") await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
+        if (action === "start") {
+          await saveTargetForms(row);
+          await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
+        }
         if (action === "stop") await api(`/accounts/${account.id}/worker/stop`, { method: "POST" });
         if (action === "login") {
           await api(`/accounts/${account.id}/login`, { method: "POST", body: "{}" });
@@ -586,7 +589,7 @@ function renderTarget(account, target) {
       <strong>${escapeHtml(billingDisplayLabel(target.billing_cycle))} / ${escapeHtml(target.tier)}</strong>
       <span>${target.enabled ? escapeHtml(t("enabledStatus")) : escapeHtml(t("disabledStatus"))}</span>
     </div>
-    <form class="target-edit-form">
+    <form class="target-edit-form" data-target-id="${escapeAttr(String(target.id))}">
       ${targetFormFields(target)}
       <div class="target-actions">
         <button type="submit">${escapeHtml(t("saveButton"))}</button>
@@ -601,10 +604,7 @@ function renderTarget(account, target) {
   item.querySelector(".target-edit-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     await withUiError(t("saveTargetFailed"), async () => {
-      await api(`/targets/${target.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(targetPayloadFromForm(event.currentTarget)),
-      });
+      await saveTargetForm(event.currentTarget);
       await loadAccounts();
     });
   });
@@ -631,6 +631,21 @@ function renderTarget(account, target) {
   });
 
   return item;
+}
+
+async function saveTargetForms(root) {
+  for (const form of root.querySelectorAll(".target-edit-form")) {
+    await saveTargetForm(form);
+  }
+}
+
+async function saveTargetForm(form) {
+  const targetId = form.dataset.targetId;
+  if (!targetId) return;
+  await api(`/targets/${targetId}`, {
+    method: "PATCH",
+    body: JSON.stringify(targetPayloadFromForm(form)),
+  });
 }
 
 function targetFormFields(target = null) {
