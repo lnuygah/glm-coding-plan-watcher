@@ -18,7 +18,7 @@ def test_parse_restock_datetime() -> None:
 
     parsed = parse_restock_datetime("暂时售罄 ｜06月18日 10:00 补货", now=now)
 
-    assert parsed == datetime(2026, 6, 18, 10, 0, tzinfo=UTC)
+    assert parsed == datetime(2026, 6, 18, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
 def test_parse_restock_datetime_invalid_text_returns_none() -> None:
@@ -28,11 +28,23 @@ def test_parse_restock_datetime_invalid_text_returns_none() -> None:
 
 
 def test_parse_restock_datetime_cross_year() -> None:
-    now = datetime(2026, 12, 31, 20, 0, tzinfo=UTC)
+    now = datetime(2026, 12, 31, 20, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
-    parsed = parse_restock_datetime("01月01日 10:00 补货", now=now)
+    parsed = parse_restock_datetime("12月30日 10:00 补货", now=now)
 
-    assert parsed == datetime(2027, 1, 1, 10, 0, tzinfo=UTC)
+    assert parsed == datetime(2027, 12, 30, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+
+def test_parse_restock_datetime_uses_site_timezone_by_default() -> None:
+    now = datetime(2026, 6, 18, 0, 0, tzinfo=UTC)  # 08:00 in Asia/Shanghai.
+
+    shanghai = parse_restock_datetime("06月18日 10:00 补货", now=now)
+    utc = parse_restock_datetime("06月18日 10:00 补货", now=now, timezone_name="UTC")
+
+    assert shanghai == datetime(2026, 6, 18, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert utc == datetime(2026, 6, 18, 10, 0, tzinfo=UTC)
+    assert (shanghai - now).total_seconds() == 2 * 60 * 60
+    assert (utc - now).total_seconds() == 10 * 60 * 60
 
 
 def test_scheduler_near_hint_clamps_to_minimum() -> None:
@@ -68,6 +80,44 @@ def test_scheduler_mid_hint_does_not_poll_below_minimum() -> None:
     )
 
     assert policy.next_delay([result("06月18日 10:00 补货")]) == MIN_INTERVAL_SECONDS
+
+
+def test_scheduler_restock_hint_uses_site_timezone_without_active_window() -> None:
+    now = datetime(2026, 6, 18, 0, 0, tzinfo=UTC)  # 08:00 in Asia/Shanghai.
+    policy = SchedulerPolicy(
+        base_interval_seconds=90,
+        jitter_seconds=30,
+        now_fn=lambda: now,
+        random_fn=lambda _low, _high: 0,
+    )
+
+    assert policy.next_delay([result("暂时售罄 ｜06月18日 10:00 补货")]) == 90
+
+
+def test_scheduler_restock_hint_respects_target_timezone() -> None:
+    now = datetime(2026, 6, 18, 0, 0, tzinfo=UTC)
+    utc_target = TargetSpec(
+        billing_cycle=BillingCycle.monthly,
+        tier=Tier.Pro,
+        active_timezone="UTC",
+    )
+    policy = SchedulerPolicy(
+        base_interval_seconds=90,
+        jitter_seconds=0,
+        now_fn=lambda: now,
+    )
+
+    delay = policy.next_delay(
+        [
+            CheckResult(
+                target=utc_target,
+                state=ButtonState.sold_out,
+                button_text="06月18日 10:00 补货",
+            )
+        ]
+    )
+
+    assert delay == 3600
 
 
 def test_scheduler_no_hint_falls_back_to_interval_with_jitter() -> None:

@@ -17,6 +17,7 @@ ACTIVE_MIN_INTERVAL_SECONDS = 1.0
 DEFAULT_ACTIVE_INTERVAL_SECONDS = 3.0
 DEFAULT_ACTIVE_JITTER_SECONDS = 1.0
 DEFAULT_IDLE_INTERVAL_SECONDS = 600.0
+DEFAULT_RESTOCK_TIMEZONE = "Asia/Shanghai"
 
 _HHMM_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})$")
 
@@ -26,21 +27,30 @@ _RESTOCK_RE = re.compile(
 )
 
 
-def parse_restock_datetime(text: str, now: datetime | None = None) -> datetime | None:
+def parse_restock_datetime(
+    text: str,
+    now: datetime | None = None,
+    timezone_name: str = DEFAULT_RESTOCK_TIMEZONE,
+) -> datetime | None:
     """Parse Chinese restock text into a candidate datetime.
 
     The page only exposes month/day/hour/minute, so the current year is assumed.
     If that candidate is clearly behind the current date, it is treated as a
     cross-year hint. Recent past values stay in the current year so the caller
     can tighten to the minimum interval instead of blindly waiting a year.
+
+    Restock copy comes from bigmodel.cn's Chinese page, so an empty timezone
+    falls back to the site timezone (Asia/Shanghai) instead of the process/UTC
+    timezone used by the worker scheduler.
     """
 
     match = _RESTOCK_RE.search(text)
     if match is None:
         return None
 
-    base = now or datetime.now(UTC)
-    tzinfo = base.tzinfo
+    zone = _resolve_restock_timezone(timezone_name)
+    current = now or datetime.now(UTC)
+    base = current.replace(tzinfo=zone) if current.tzinfo is None else current.astimezone(zone)
     try:
         candidate = datetime(
             year=base.year,
@@ -48,7 +58,7 @@ def parse_restock_datetime(text: str, now: datetime | None = None) -> datetime |
             day=int(match.group("day")),
             hour=int(match.group("hour")),
             minute=int(match.group("minute")),
-            tzinfo=tzinfo,
+            tzinfo=zone,
         )
     except ValueError:
         return None
@@ -88,7 +98,11 @@ class SchedulerPolicy:
         if active_delay is not None:
             return active_delay
 
-        base = self._base_delay_from_restock_hints(results)
+        base = self._base_delay_from_restock_hints(
+            results,
+            timezone_name=self.active_timezone,
+            prefer_target_timezone=True,
+        )
         if base is None:
             base = self.base_interval_seconds
 
@@ -117,13 +131,29 @@ class SchedulerPolicy:
         local_now = _localize_now(now or self.now_fn(), timezone_name)
         return _in_window(local_now.time(), start, end)
 
-    def _base_delay_from_restock_hints(self, results: Sequence[CheckResult]) -> float | None:
+    def _base_delay_from_restock_hints(
+        self,
+        results: Sequence[CheckResult],
+        *,
+        timezone_name: str = "",
+        prefer_target_timezone: bool = True,
+    ) -> float | None:
         now = self.now_fn()
         hints = [
             hint
             for result in results
             if result.state is ButtonState.sold_out
-            for hint in [parse_restock_datetime(result.button_text, now=now)]
+            for hint in [
+                parse_restock_datetime(
+                    result.button_text,
+                    now=now,
+                    timezone_name=(
+                        result.target.active_timezone
+                        if prefer_target_timezone and result.target.active_timezone.strip()
+                        else timezone_name
+                    ),
+                )
+            ]
             if hint is not None
         ]
         if not hints:
@@ -162,7 +192,11 @@ class SchedulerPolicy:
             active_interval_seconds=self.active_interval_seconds,
             active_jitter_seconds=self.active_jitter_seconds,
             idle_interval_seconds=self.idle_interval_seconds,
-            hint_delay=self._base_delay_from_restock_hints(results),
+            hint_delay=self._base_delay_from_restock_hints(
+                results,
+                timezone_name=self.active_timezone,
+                prefer_target_timezone=False,
+            ),
             now=now,
         )
         if policy_candidate is not None:
@@ -177,7 +211,11 @@ class SchedulerPolicy:
                 active_interval_seconds=target.active_interval_seconds,
                 active_jitter_seconds=target.active_jitter_seconds,
                 idle_interval_seconds=target.idle_interval_seconds,
-                hint_delay=self._base_delay_from_restock_hints([result]),
+                hint_delay=self._base_delay_from_restock_hints(
+                    [result],
+                    timezone_name=target.active_timezone,
+                    prefer_target_timezone=True,
+                ),
                 now=now,
             )
             if target_candidate is not None:
@@ -248,6 +286,14 @@ def _resolve_timezone(timezone_name: str) -> tzinfo:
         except ZoneInfoNotFoundError:
             return datetime.now().astimezone().tzinfo or UTC
     return datetime.now().astimezone().tzinfo or UTC
+
+
+def _resolve_restock_timezone(timezone_name: str) -> tzinfo:
+    name = timezone_name.strip() or DEFAULT_RESTOCK_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo(DEFAULT_RESTOCK_TIMEZONE)
 
 
 def _in_window(current: time, start: time, end: time) -> bool:
