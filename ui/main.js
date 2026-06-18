@@ -266,6 +266,22 @@ const actionKeys = {
   deleteaccount: "deleteAccountButton",
 };
 
+const NEW_TARGET_DEFAULTS = {
+  active_window_start: "10:00",
+  active_window_end: "10:30",
+  active_timezone: "Asia/Shanghai",
+  active_interval_seconds: 3,
+  active_jitter_seconds: 1,
+  auto_click_entry: true,
+  dry_run: false,
+  enabled: true,
+  idle_interval_seconds: 600,
+  interval: 90,
+  jitter: 30,
+  on_hit_handoff: true,
+  visible_in_window: false,
+};
+
 let ws = null;
 const accountTargets = new Map();
 const accountNames = new Map();
@@ -617,7 +633,8 @@ function renderTarget(account, target) {
   return item;
 }
 
-function targetFormFields(target = {}) {
+function targetFormFields(target = null) {
+  const values = target ?? NEW_TARGET_DEFAULTS;
   return `
     <div class="form-grid">
       <label>
@@ -638,49 +655,49 @@ function targetFormFields(target = {}) {
       </label>
       <label>
         ${escapeHtml(t("windowStartLabel"))}
-        <input name="active_window_start" placeholder="10:00" value="${escapeAttr(target.active_window_start || "")}" />
+        <input name="active_window_start" placeholder="10:00" value="${escapeAttr(values.active_window_start ?? "")}" />
       </label>
       <label>
         ${escapeHtml(t("windowEndLabel"))}
-        <input name="active_window_end" placeholder="10:30" value="${escapeAttr(target.active_window_end || "")}" />
+        <input name="active_window_end" placeholder="10:30" value="${escapeAttr(values.active_window_end ?? "")}" />
       </label>
     </div>
     <div class="checkbox-row">
-      ${checkbox("enabled", target.enabled ?? true, t("enabledLabel"))}
-      ${checkbox("visible_in_window", target.visible_in_window ?? false, t("visibleInWindowLabel"))}
-      ${checkbox("on_hit_handoff", target.on_hit_handoff ?? true, t("openHandoffLabel"))}
+      ${checkbox("enabled", values.enabled ?? true, t("enabledLabel"))}
+      ${checkbox("visible_in_window", values.visible_in_window ?? false, t("visibleInWindowLabel"))}
+      ${checkbox("on_hit_handoff", values.on_hit_handoff ?? true, t("openHandoffLabel"))}
     </div>
     <details class="advanced-target">
       <summary>${escapeHtml(t("advancedSettingsLabel"))}</summary>
       <div class="form-grid">
         <label>
           ${escapeHtml(t("baseIntervalLabel"))}
-          <input name="interval" type="number" min="1" step="1" value="${numberValue(target.interval, 90)}" />
+          <input name="interval" type="number" min="1" step="1" value="${numberValue(values.interval, 90)}" />
         </label>
         <label>
           ${escapeHtml(t("baseJitterLabel"))}
-          <input name="jitter" type="number" min="0" step="1" value="${numberValue(target.jitter, 30)}" />
+          <input name="jitter" type="number" min="0" step="1" value="${numberValue(values.jitter, 30)}" />
         </label>
         <label>
           ${escapeHtml(t("timezoneLabel"))}
-          <input name="active_timezone" placeholder="${escapeAttr(t("timezonePlaceholder"))}" value="${escapeAttr(target.active_timezone || "")}" />
+          <input name="active_timezone" placeholder="${escapeAttr(t("timezonePlaceholder"))}" value="${escapeAttr(values.active_timezone ?? "")}" />
         </label>
         <label>
           ${escapeHtml(t("activeIntervalLabel"))}
-          <input name="active_interval_seconds" type="number" min="1" step="0.5" value="${numberValue(target.active_interval_seconds, 3)}" />
+          <input name="active_interval_seconds" type="number" min="1" step="0.5" value="${numberValue(values.active_interval_seconds, 3)}" />
         </label>
         <label>
           ${escapeHtml(t("activeJitterLabel"))}
-          <input name="active_jitter_seconds" type="number" min="0" step="0.5" value="${numberValue(target.active_jitter_seconds, 1)}" />
+          <input name="active_jitter_seconds" type="number" min="0" step="0.5" value="${numberValue(values.active_jitter_seconds, 1)}" />
         </label>
         <label>
           ${escapeHtml(t("idleIntervalLabel"))}
-          <input name="idle_interval_seconds" type="number" min="1" step="1" value="${numberValue(target.idle_interval_seconds, 600)}" />
+          <input name="idle_interval_seconds" type="number" min="1" step="1" value="${numberValue(values.idle_interval_seconds, 600)}" />
         </label>
       </div>
       <div class="checkbox-row">
-        ${checkbox("dry_run", target.dry_run ?? false, t("dryRunLabel"))}
-        ${checkbox("auto_click_entry", target.auto_click_entry ?? true, t("clickEntryLabel"))}
+        ${checkbox("dry_run", values.dry_run ?? false, t("dryRunLabel"))}
+        ${checkbox("auto_click_entry", values.auto_click_entry ?? true, t("clickEntryLabel"))}
       </div>
     </details>
   `;
