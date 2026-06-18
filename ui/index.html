@@ -68,7 +68,16 @@
         </div>
 
         <div class="panel">
-          <h2 data-i18n="eventsTitle">Events</h2>
+          <div class="panel-header events-panel-header">
+            <h2 data-i18n="eventsTitle">Events</h2>
+            <div class="event-filter" role="group" aria-label="Event filter">
+              <button id="events-filter-all" type="button" data-i18n="evtFilterAll">全部</button>
+              <button id="events-filter-important" type="button" data-i18n="evtFilterImportant">
+                只看重要
+              </button>
+            </div>
+          </div>
+          <p id="events-empty" class="events-empty" data-i18n="eventsEmpty">暂无事件</p>
           <div id="events" class="events"></div>
         </div>
       </section>

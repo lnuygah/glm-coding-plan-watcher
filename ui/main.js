@@ -2,6 +2,9 @@ const daemonUrlInput = document.querySelector("#daemon-url");
 const daemonTokenInput = document.querySelector("#daemon-token");
 const accountsEl = document.querySelector("#accounts");
 const eventsEl = document.querySelector("#events");
+const eventsEmptyEl = document.querySelector("#events-empty");
+const eventsFilterAllButton = document.querySelector("#events-filter-all");
+const eventsFilterImportantButton = document.querySelector("#events-filter-important");
 const refreshButton = document.querySelector("#refresh");
 const accountForm = document.querySelector("#account-form");
 const statusEl = document.querySelector("#status");
@@ -77,6 +80,32 @@ const translations = {
     addAccountFailed: "添加账号失败",
     refreshFailed: "刷新失败",
     loadAccountsFailed: "加载账号失败",
+    evtFilterAll: "全部",
+    evtFilterImportant: "只看重要",
+    eventsEmpty: "暂无事件",
+    evtRawToggle: "⌄ 原始",
+    evtRefreshIn: "约 {seconds} 秒后刷新",
+    evtHit: "可以买了!",
+    evtAvailable: "可购买",
+    evtSoldOut: "售罄",
+    evtAuthRequired: "需要登录",
+    evtHeartbeat: "轮询中",
+    evtError: "错误",
+    evtLogin: "登录会话",
+    evtHandoff: "接管付款",
+    evtShutdown: "已停止",
+    evtHitDetail: "命中可购买，请接管付款。",
+    evtAvailableDetail: "当前可购买。",
+    evtSoldOutDetail: "仍是售罄。",
+    evtAuthRequiredDetail: "登录态失效，请重新登录。",
+    evtHeartbeatDetail: "监控正常运行。",
+    evtErrorDetail: "发生错误。",
+    evtLoginStarted: "已开始，请在弹出的浏览器中手动登录。",
+    evtLoginEnded: "已结束。",
+    evtHandoffStarted: "已开始，请在弹出的浏览器中人工付款。",
+    evtHandoffEnded: "已结束。",
+    evtShutdownDetail: "worker 已停止。",
+    evtFallbackTarget: "账号",
   },
   en: {
     documentTitle: "GLM Plan Watcher",
@@ -145,6 +174,32 @@ const translations = {
     addAccountFailed: "Add account failed",
     refreshFailed: "Refresh failed",
     loadAccountsFailed: "Load accounts failed",
+    evtFilterAll: "All",
+    evtFilterImportant: "Important",
+    eventsEmpty: "No events",
+    evtRawToggle: "⌄ Raw",
+    evtRefreshIn: "Refresh in about {seconds}s",
+    evtHit: "Available!",
+    evtAvailable: "Available",
+    evtSoldOut: "Sold out",
+    evtAuthRequired: "Login required",
+    evtHeartbeat: "Polling",
+    evtError: "Error",
+    evtLogin: "Login session",
+    evtHandoff: "Payment handoff",
+    evtShutdown: "Stopped",
+    evtHitDetail: "Available now. Take over payment manually.",
+    evtAvailableDetail: "Currently available.",
+    evtSoldOutDetail: "Still sold out.",
+    evtAuthRequiredDetail: "Session expired. Please log in again.",
+    evtHeartbeatDetail: "Monitoring is running.",
+    evtErrorDetail: "An error occurred.",
+    evtLoginStarted: "Started. Sign in manually in the visible browser.",
+    evtLoginEnded: "Ended.",
+    evtHandoffStarted: "Started. Complete payment manually in the visible browser.",
+    evtHandoffEnded: "Ended.",
+    evtShutdownDetail: "Worker stopped.",
+    evtFallbackTarget: "account",
   },
 };
 
@@ -196,6 +251,8 @@ const accountTargets = new Map();
 // Login state is not exposed by the API; we only flag accounts that emitted an
 // auth_required event so we can surface a prominent "needs login" prompt.
 const authRequiredAccounts = new Set();
+const eventPayloads = [];
+let currentEventFilter = "all";
 let currentLanguage = detectLanguage();
 
 function detectLanguage() {
@@ -663,35 +720,249 @@ function sleep(ms) {
 }
 
 function prependEvent(payload) {
-  const item = document.createElement("article");
-  item.className = "event-card";
-  const event = payload.event ?? {};
-  const actions = document.createElement("div");
-  actions.className = "event-actions";
-
-  if (event.button_state === "auth_required") {
-    actions.append(eventButton(t("loginButton"), () => api(`/accounts/${payload.account_id}/login`, {
-      method: "POST",
-      body: "{}",
-    })));
+  eventPayloads.unshift(payload);
+  while (eventPayloads.length > 80) {
+    eventPayloads.pop();
   }
-  if (event.type === "hit" && event.available) {
-    actions.append(eventButton(t("handoffButton"), () => handoffForEvent(payload)));
-  }
-
-  const pre = document.createElement("pre");
-  pre.textContent = JSON.stringify(payload, null, 2);
-  item.append(actions, pre);
-  eventsEl.prepend(item);
+  // 只插入新卡片，不整列重渲染——否则每来一条事件（窗口内每 ~3s）都会把已展开的「原始」
+  // 详情折叠掉。整列重渲染只在语言切换时用 renderEvents()。
+  eventsEl.prepend(renderEventCard(payload));
   while (eventsEl.children.length > 80) {
     eventsEl.lastElementChild?.remove();
   }
+  applyEventFilter();
 }
 
-function eventButton(label, onClick) {
+function renderEvents() {
+  eventsEl.innerHTML = "";
+  for (const payload of eventPayloads) {
+    eventsEl.append(renderEventCard(payload));
+  }
+  applyEventFilter();
+}
+
+function renderEventCard(payload) {
+  const item = document.createElement("article");
+  const event = payload.event ?? {};
+  const presentation = eventPresentation(event);
+  item.className = `event-card evt--${presentation.severity}`;
+  item.dataset.eventType = event.type || "unknown";
+  item.dataset.important = String(isImportantEvent(event));
+
+  const icon = document.createElement("span");
+  icon.className = "event-icon";
+  icon.textContent = presentation.icon;
+
+  const body = document.createElement("div");
+  body.className = "event-body";
+
+  const top = document.createElement("div");
+  top.className = "event-top";
+
+  const chip = document.createElement("span");
+  chip.className = "event-chip";
+  chip.textContent = presentation.title;
+
+  const target = document.createElement("span");
+  target.className = "event-target";
+  target.textContent = event.target || t("evtFallbackTarget");
+
+  const time = document.createElement("time");
+  time.className = "event-time";
+  time.textContent = eventLocalTime(event);
+
+  top.append(chip, target, time);
+
+  const bottom = document.createElement("div");
+  bottom.className = "event-bottom";
+
+  const detail = document.createElement("p");
+  detail.className = "event-detail";
+  detail.textContent = presentation.detail;
+
+  const actions = document.createElement("div");
+  actions.className = "event-actions";
+  if (event.button_state === "auth_required") {
+    actions.append(
+      eventButton(t("loginStepButton"), () =>
+        api(`/accounts/${payload.account_id}/login`, {
+          method: "POST",
+          body: "{}",
+        }),
+      ),
+    );
+  }
+  if (event.type === "hit" && event.available) {
+    actions.append(
+      eventButton(t("handoffButton"), () => handoffForEvent(payload), {
+        title: t("handoffButtonTitle"),
+      }),
+    );
+  }
+
+  const raw = document.createElement("details");
+  raw.className = "event-raw";
+  const rawSummary = document.createElement("summary");
+  rawSummary.textContent = t("evtRawToggle");
+  const pre = document.createElement("pre");
+  pre.textContent = JSON.stringify(payload, null, 2);
+  raw.append(rawSummary, pre);
+  actions.append(raw);
+
+  bottom.append(detail, actions);
+  body.append(top, bottom);
+  item.append(icon, body);
+  return item;
+}
+
+const IMPORTANT_EVENT_TYPES = new Set(["hit", "error", "login", "handoff", "shutdown"]);
+
+function isImportantEvent(event) {
+  return IMPORTANT_EVENT_TYPES.has(event.type) || event.button_state === "auth_required";
+}
+
+function eventPresentation(event) {
+  if (event.type === "hit" && event.available) {
+    return {
+      icon: "🎯",
+      title: t("evtHit"),
+      severity: "success",
+      detail: event.message || event.button_text || t("evtHitDetail"),
+    };
+  }
+  if (event.button_state === "auth_required") {
+    return {
+      icon: "🔑",
+      title: t("evtAuthRequired"),
+      severity: "warning",
+      detail: event.message || t("evtAuthRequiredDetail"),
+    };
+  }
+  if (event.type === "check" && event.button_state === "available") {
+    return {
+      icon: "🟢",
+      title: t("evtAvailable"),
+      severity: "success",
+      detail: event.message || event.button_text || t("evtAvailableDetail"),
+    };
+  }
+  if (event.type === "check" && event.button_state === "sold_out") {
+    return {
+      icon: "⚪️",
+      title: t("evtSoldOut"),
+      severity: "muted",
+      detail: event.message || event.button_text || t("evtSoldOutDetail"),
+    };
+  }
+  if (event.type === "heartbeat") {
+    return {
+      icon: "💓",
+      title: t("evtHeartbeat"),
+      severity: "muted",
+      detail: heartbeatDetail(event),
+    };
+  }
+  if (event.type === "error") {
+    return {
+      icon: "⚠️",
+      title: t("evtError"),
+      severity: "danger",
+      detail: event.message || t("evtErrorDetail"),
+    };
+  }
+  if (event.type === "login") {
+    return {
+      icon: "🔓",
+      title: t("evtLogin"),
+      severity: "info",
+      detail: sessionDetail(event, "login"),
+    };
+  }
+  if (event.type === "handoff") {
+    return {
+      icon: "🤝",
+      title: t("evtHandoff"),
+      severity: "info",
+      detail: sessionDetail(event, "handoff"),
+    };
+  }
+  if (event.type === "shutdown") {
+    return {
+      icon: "⏹",
+      title: t("evtShutdown"),
+      severity: "muted",
+      detail: event.message || t("evtShutdownDetail"),
+    };
+  }
+  return {
+    icon: "•",
+    title: event.type || "event",
+    severity: "muted",
+    detail: event.message || event.button_text || event.button_state || event.action || "",
+  };
+}
+
+function heartbeatDetail(event) {
+  const seconds = secondsUntil(event.next_refresh_at);
+  if (seconds !== null) {
+    return t("evtRefreshIn", { seconds });
+  }
+  return event.message || t("evtHeartbeatDetail");
+}
+
+function sessionDetail(event, kind) {
+  if (kind === "login") {
+    if (event.action === "started") return t("evtLoginStarted");
+    if (event.action === "ended") return t("evtLoginEnded");
+  }
+  if (kind === "handoff") {
+    if (event.action === "started") return t("evtHandoffStarted");
+    if (event.action === "ended") return t("evtHandoffEnded");
+  }
+  return event.message || event.action || "";
+}
+
+function secondsUntil(timestamp) {
+  if (!timestamp) return null;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  const seconds = Math.round((date.getTime() - Date.now()) / 1000);
+  return seconds >= 0 ? seconds : null;
+}
+
+function eventLocalTime(event) {
+  if (!event.ts) return "";
+  const date = new Date(event.ts);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString(currentLanguage, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function applyEventFilter() {
+  let visibleCount = 0;
+  for (const card of eventsEl.children) {
+    const visible = currentEventFilter === "all" || card.dataset.important === "true";
+    card.hidden = !visible;
+    if (visible) visibleCount += 1;
+  }
+  eventsFilterAllButton.dataset.active = String(currentEventFilter === "all");
+  eventsFilterImportantButton.dataset.active = String(currentEventFilter === "important");
+  eventsFilterAllButton.setAttribute("aria-pressed", String(currentEventFilter === "all"));
+  eventsFilterImportantButton.setAttribute("aria-pressed", String(currentEventFilter === "important"));
+  eventsEmptyEl.hidden = visibleCount > 0;
+}
+
+function eventButton(label, onClick, options = {}) {
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = label;
+  if (options.title) {
+    button.title = options.title;
+  }
   button.addEventListener("click", async () => {
     await withUiError(t("eventActionFailed", { action: label }), async () => {
       await onClick();
@@ -779,10 +1050,20 @@ languageSelect.addEventListener("change", () => {
   currentLanguage = languageSelect.value;
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, currentLanguage);
   applyI18n();
+  renderEvents();
   void withUiError(t("loadAccountsFailed"), loadAccounts);
+});
+eventsFilterAllButton.addEventListener("click", () => {
+  currentEventFilter = "all";
+  applyEventFilter();
+});
+eventsFilterImportantButton.addEventListener("click", () => {
+  currentEventFilter = "important";
+  applyEventFilter();
 });
 
 applyI18n();
+applyEventFilter();
 await loadHandshake();
 connectEvents();
 void withUiError(t("loadAccountsFailed"), loadAccounts);
