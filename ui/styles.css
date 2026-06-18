@@ -56,12 +56,47 @@ p {
   min-width: 300px;
 }
 
+.connection .advanced {
+  font-size: 13px;
+  color: #555;
+}
+
+.connection .advanced summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.connection .advanced label {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 .notice {
   background: #fff8e5;
   border: 1px solid #efd48c;
   border-radius: 8px;
   margin: 18px 0;
   padding: 12px 14px;
+}
+
+.status {
+  border-radius: 8px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+}
+
+.status[data-kind="error"] {
+  background: #fff1f1;
+  border: 1px solid #e5a5a5;
+  color: #7a1d1d;
+}
+
+.status[data-kind="info"] {
+  background: #eef6ff;
+  border: 1px solid #a9caed;
+  color: #17436b;
 }
 
 .grid {
@@ -80,7 +115,8 @@ p {
 .panel-header,
 .form-row,
 .actions,
-.target-form {
+.target-actions,
+.event-actions {
   display: flex;
   gap: 8px;
 }
@@ -89,6 +125,40 @@ p {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+
+.events-panel-header {
+  gap: 12px;
+}
+
+.event-filter {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.event-filter button,
+.event-account-filter select {
+  background: #fff;
+  color: #3a4350;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.event-filter button[data-active="true"] {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+  font-weight: 600;
+}
+
+.event-account-filter {
+  align-items: center;
+  color: #5b6572;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
 }
 
 .form-row {
@@ -126,23 +196,381 @@ p {
   padding: 3px 8px;
 }
 
+.status-badge {
+  font-size: 12px;
+}
+
+.status-badge[data-status="running"] {
+  background: #e3f6e8;
+  color: #1f6b3a;
+}
+
+.status-badge[data-status="crashed"],
+.status-badge[data-status="exited"] {
+  background: #fdecec;
+  color: #8a2020;
+}
+
+.status-badge[data-status="login"],
+.status-badge[data-status="handoff"] {
+  background: #eef6ff;
+  color: #17436b;
+}
+
+.first-run-guide {
+  background: #eef6ff;
+  border: 1px solid #c5dcf3;
+  border-radius: 8px;
+  color: #17436b;
+  font-size: 13px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+}
+
+.login-prompt {
+  background: #fff8e5;
+  border: 1px solid #efd48c;
+  border-radius: 8px;
+  color: #6b5310;
+  font-size: 13px;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.actions .primary-action {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+  font-weight: 600;
+}
+
+.actions .secondary-action {
+  background: #fff;
+  color: #3a4350;
+}
+
 .profile {
   color: #5b6572;
   font-size: 13px;
+  margin-top: 4px;
 }
 
 .targets {
+  display: grid;
+  gap: 10px;
+}
+
+.target-card {
+  background: #f9fafb;
+  border: 1px solid #e1e5ea;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.target-title {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.target-title span {
+  background: #eef2f6;
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+.target-form,
+.target-edit-form,
+.add-target {
+  display: grid;
+  gap: 10px;
+}
+
+.add-target summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.advanced-target {
+  display: grid;
+  gap: 10px;
+}
+
+.advanced-target summary {
+  color: #5b6572;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+
+.form-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid label {
+  color: #5b6572;
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.checkbox-row {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.checkbox-row label {
+  align-items: center;
+  display: flex;
   gap: 6px;
 }
 
-.events pre {
+.target-actions,
+.event-actions {
+  flex-wrap: wrap;
+}
+
+.event-card {
+  align-items: start;
+  background: #f8fafc;
+  border: 1px solid #e1e5ea;
+  border-left: 4px solid #8c959f;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  padding: 10px 12px;
+}
+
+/* .event-card 的 display:grid 是 author 规则，会盖过 UA 的 [hidden]{display:none}；过滤靠
+   设置 card.hidden，这里必须显式让隐藏态生效，否则「只看重要」不会真正隐藏卡片。 */
+.event-card[hidden] {
+  display: none;
+}
+
+.event-card[data-event-type="heartbeat"] {
+  font-size: 13px;
+}
+
+.event-icon {
+  font-size: 18px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.event-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.event-top,
+.event-bottom {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.event-top {
+  justify-content: space-between;
+}
+
+.event-chip,
+.event-account,
+.event-target {
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+.event-chip,
+.event-account {
+  background: #eef2f6;
+  color: #24292f;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.event-account {
+  color: #24324a;
+}
+
+.event-account[data-account-color="0"] {
+  background: #e5f0ff;
+}
+
+.event-account[data-account-color="1"] {
+  background: #e4f6ed;
+}
+
+.event-account[data-account-color="2"] {
+  background: #fff1cc;
+}
+
+.event-account[data-account-color="3"] {
+  background: #f4e8ff;
+}
+
+.event-account[data-account-color="4"] {
+  background: #e7f5f7;
+}
+
+.event-account[data-account-color="5"] {
+  background: #ffe8e8;
+}
+
+.event-account[data-account-color="6"] {
+  background: #edf0f5;
+}
+
+.event-account[data-account-color="7"] {
+  background: #e9f7dc;
+}
+
+.event-target {
+  color: #5b6572;
+  flex: 1 1 auto;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-time {
+  color: #6b7280;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.event-bottom {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.event-detail {
+  color: #3a4350;
+  flex: 1 1 auto;
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.event-actions {
+  align-items: center;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.event-actions button {
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.event-raw {
+  color: #5b6572;
+  font-size: 12px;
+}
+
+.event-raw summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.event-raw pre {
   background: #101820;
   border-radius: 6px;
   color: #d6e2ef;
   font-size: 12px;
-  margin: 0;
+  margin: 8px 0 0;
+  max-width: 100%;
   overflow: auto;
   padding: 10px;
+}
+
+.evt--success {
+  background: #f1fbf4;
+  border-left-color: #2da44e;
+}
+
+.evt--success .event-chip {
+  background: #dff6e6;
+  color: #1f6b3a;
+}
+
+.evt--warning {
+  background: #fff8e5;
+  border-left-color: #d29922;
+}
+
+.evt--warning .event-chip {
+  background: #f8e6b5;
+  color: #6b5310;
+}
+
+.evt--danger {
+  background: #fff1f1;
+  border-left-color: #cf222e;
+}
+
+.evt--danger .event-chip {
+  background: #fdecec;
+  color: #8a2020;
+}
+
+.evt--info {
+  background: #eef6ff;
+  border-left-color: #0969da;
+}
+
+.evt--info .event-chip {
+  background: #dbeeff;
+  color: #17436b;
+}
+
+.evt--muted {
+  background: #f8fafc;
+  border-left-color: #8c959f;
+}
+
+.evt--muted .event-chip {
+  background: #eef2f6;
+  color: #5b6572;
+}
+
+.events-empty {
+  color: #6b7280;
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+
+@media (max-width: 820px) {
+  .toolbar,
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .event-top,
+  .event-bottom {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .event-actions {
+    justify-content: flex-start;
+  }
 }

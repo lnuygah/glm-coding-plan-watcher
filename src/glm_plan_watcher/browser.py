@@ -62,6 +62,20 @@ class BrowserSession:
         except Exception as exc:
             raise BrowserError(f"页面打开失败：{url}: {exc}") from exc
 
+    async def relaunch_headless(self, headless: bool) -> Page:
+        """在同一进程内切换 headless / 可见模式并重开持久化上下文。
+
+        Playwright 无法在已存活的 context 上翻转 headless 标志，因此必须重建 context。这里先
+        完整关闭旧 context（释放 profile 锁），再用新的 headless 标志重启——全程串行、同一进程、
+        同一 user_data_dir，保持「一个 profile 同一时刻只有一个进程」的互斥语义，不会另起进程抢占。
+        """
+
+        if self.context is not None and self.config.headless == headless:
+            return self.require_page()
+        await self.close()
+        self.config.headless = headless
+        return await self.start()
+
     async def capture_artifacts(self, kind: str, target: TargetSpec | None = None) -> tuple[Path, Path]:
         page = self.require_page()
         screenshot = await self.storage.save_screenshot(page, kind, target)
@@ -80,6 +94,8 @@ class BrowserSession:
             with suppress(Exception):
                 await self.context.close()
             self.context = None
+            # context 关闭后旧 page 已失效，清掉引用避免 relaunch 后误用 stale page。
+            self.page = None
         if self.playwright is not None:
             with suppress(Exception):
                 await self.playwright.stop()

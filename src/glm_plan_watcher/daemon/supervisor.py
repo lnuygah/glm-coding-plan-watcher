@@ -91,8 +91,24 @@ class WorkerSupervisor:
         self._handles: dict[int, WorkerHandle] = {}
         self._headful_handles: dict[int, HeadfulHandle] = {}
         self._restart_counts: dict[int, int] = {}
+        self._auto_handoff_tasks: set[asyncio.Task[None]] = set()
+        # worker spawn 在后台进行：_starting 占位互斥，_spawn_tasks 持有任务引用避免被 GC。
+        self._starting: set[int] = set()
+        self._spawn_tasks: set[asyncio.Task[None]] = set()
+        # 每账号正在进行的后台 spawn 任务，供 stop_worker 在启动 login/handoff 前 drain，
+        # 避免后台 spawn 出来的 worker 与紧随其后的 headful 会话抢占同一 profile。
+        self._spawn_tasks_by_account: dict[int, asyncio.Task[None]] = {}
 
     async def start_worker(self, account_id: int) -> dict[str, object]:
+        """请求启动账号 worker，并尽快返回。
+
+        关键修复：进程 spawn（asyncio.create_subprocess_exec）在打包 sidecar/冷启动解释器下可能
+        耗时数秒；若把整个 HTTP 响应阻塞到 spawn 完成，WebKit webview 会中止 fetch（GUI 报
+        “启动 失败: Load failed”）。因此这里只做廉价的互斥校验与配置物化（可同步 400），把
+        worker 标记为 "starting" 后立即返回，真正的 spawn + 管线接线放到后台任务里完成；就绪状态
+        通过 worker status 的 heartbeat（→ running）和事件流对外暴露。
+        """
+
         headful = self._headful_handles.get(account_id)
         if headful is not None and headful.process.returncode is None:
             raise ProfileInUseError(f"account profile is in visible {headful.kind} session")
@@ -100,10 +116,61 @@ class WorkerSupervisor:
         existing = self._handles.get(account_id)
         if existing is not None and existing.process.returncode is None and existing.desired_running:
             raise WorkerAlreadyRunningError(f"worker already running for account {account_id}")
+        if account_id in self._starting:
+            raise WorkerAlreadyRunningError(f"worker already starting for account {account_id}")
 
+        # materialize_config 是同步的，且会在缺少 enabled targets 时抛 ValueError——保持同步抛出，
+        # 让路由把它映射成 400，而不是吞进后台任务。
         config_path = self.materialize_config(account_id)
+
+        # 立刻把 worker 标记为 starting，并占位互斥，避免后台 spawn 期间重复启动或被 headful 抢占。
+        self._starting.add(account_id)
+        self.repository.upsert_worker(
+            account_id,
+            pid=None,
+            status="starting",
+            started_at=datetime.now(UTC).isoformat(),
+            last_heartbeat_at=None,
+        )
+        self.repository.update_account(account_id, status="starting")
+
+        task = asyncio.create_task(self._spawn_worker_process(account_id, config_path))
+        self._spawn_tasks.add(task)
+        self._spawn_tasks_by_account[account_id] = task
+
+        def _clear_spawn(finished: asyncio.Task[None], aid: int = account_id) -> None:
+            self._spawn_tasks.discard(finished)
+            if self._spawn_tasks_by_account.get(aid) is finished:
+                self._spawn_tasks_by_account.pop(aid, None)
+
+        task.add_done_callback(_clear_spawn)
+        return self.worker_status(account_id)
+
+    async def _spawn_worker_process(self, account_id: int, config_path: Path) -> None:
+        """后台执行真正的进程 spawn 与管线接线（ingest/monitor）。"""
+
         command = [sys.executable, "-m", "glm_plan_watcher.worker", "--config", str(config_path)]
-        process = await self.process_factory(command)
+        try:
+            process = await self.process_factory(command)
+        except Exception as exc:
+            self._starting.discard(account_id)
+            self.repository.update_worker_status(account_id, status="crashed", pid=None)
+            self.repository.update_account(account_id, status="crashed")
+            await self._record_daemon_event(
+                account_id,
+                event_type="worker",
+                action="failed",
+                target="account",
+                message=f"worker spawn failed: {exc}",
+            )
+            return
+
+        # spawn 期间若被 stop_worker 取消（占位已被移除），不接管这个进程，终止并 await 回收，
+        # 避免遗留进程继续占用 profile。
+        if account_id not in self._starting:
+            await self._terminate_process(process)
+            return
+
         handle = WorkerHandle(
             account_id=account_id,
             process=process,
@@ -111,23 +178,28 @@ class WorkerSupervisor:
             restart_count=self._restart_counts.get(account_id, 0),
         )
         self._handles[account_id] = handle
+        self._starting.discard(account_id)
 
-        started_at = datetime.now(UTC).isoformat()
         self.repository.upsert_worker(
             account_id,
             pid=process.pid,
             status="running",
-            started_at=started_at,
+            started_at=datetime.now(UTC).isoformat(),
             last_heartbeat_at=None,
         )
         self.repository.update_account(account_id, status="running")
 
         if process.stdout is not None:
             handle.ingest_task = asyncio.create_task(
-                ingest_stream(process.stdout, self.repository, self.broadcaster, account_id)
+                ingest_stream(
+                    process.stdout,
+                    self.repository,
+                    self.broadcaster,
+                    account_id,
+                    on_event=self._handle_worker_event,
+                )
             )
         handle.monitor_task = asyncio.create_task(self._monitor_process(handle))
-        return self.worker_status(account_id)
 
     async def start_login_session(
         self,
@@ -158,16 +230,21 @@ class WorkerSupervisor:
         )
 
     async def stop_worker(self, account_id: int) -> dict[str, object]:
+        # 若 spawn 还在后台进行，清除占位：_spawn_worker_process 完成后发现自己已被取消，会终止刚
+        # spawn 出来的进程而不接管，避免 stop 之后又冒出一个 worker。
+        self._starting.discard(account_id)
+        # drain 正在进行的后台 spawn：清除占位后 await 它结束——它会发现 _starting 已清除并终止刚
+        # spawn 的进程，或已注册 handle（下面统一拆除）。这样 login/handoff 在 stop 之后不会与残余
+        # worker 抢占同一 profile。
+        spawn_task = self._spawn_tasks_by_account.get(account_id)
+        if spawn_task is not None:
+            with suppress(asyncio.CancelledError):
+                await spawn_task
+
         handle = self._handles.get(account_id)
         if handle is not None:
             handle.desired_running = False
-            if handle.process.returncode is None:
-                handle.process.terminate()
-                try:
-                    await asyncio.wait_for(handle.process.wait(), timeout=10)
-                except TimeoutError:
-                    handle.process.kill()
-                    await handle.process.wait()
+            await self._terminate_process(handle.process)
             if handle.ingest_task is not None:
                 handle.ingest_task.cancel()
             self._handles.pop(account_id, None)
@@ -176,6 +253,21 @@ class WorkerSupervisor:
         self.repository.update_worker_status(account_id, status="stopped", pid=None)
         self.repository.update_account(account_id, status="stopped")
         return self.worker_status(account_id)
+
+    async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
+        """终止子进程并回收：先 terminate，超时再 kill，始终 await wait，避免遗留僵尸进程。"""
+
+        if process.returncode is not None:
+            return
+        with suppress(Exception):
+            process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except TimeoutError:
+            with suppress(Exception):
+                process.kill()
+            with suppress(Exception):
+                await process.wait()
 
     def worker_status(self, account_id: int) -> dict[str, object]:
         worker = self.repository.get_worker(account_id)
@@ -199,7 +291,19 @@ class WorkerSupervisor:
             "billing_cycle": first["billing_cycle"],
             "tier": first["tier"],
             "targets": [
-                {"billing_cycle": target["billing_cycle"], "tier": target["tier"]}
+                {
+                    "billing_cycle": target["billing_cycle"],
+                    "tier": target["tier"],
+                    "active_window_start": target["active_window_start"],
+                    "active_window_end": target["active_window_end"],
+                    "active_timezone": target["active_timezone"],
+                    "active_interval_seconds": target["active_interval_seconds"],
+                    "active_jitter_seconds": target["active_jitter_seconds"],
+                    "idle_interval_seconds": target["idle_interval_seconds"],
+                    "dry_run": target["dry_run"],
+                    "auto_click_entry": target["auto_click_entry"],
+                    "visible_in_window": target["visible_in_window"],
+                }
                 for target in targets
             ],
             "refresh_interval_seconds": interval,
@@ -208,8 +312,10 @@ class WorkerSupervisor:
             "headless": True,
             "user_data_dir": account["user_data_dir"],
             "enable_trace": False,
-            "auto_click_entry": all(bool(target["auto_click_entry"]) for target in targets),
-            "dry_run": any(bool(target["dry_run"]) for target in targets),
+            # Headless daemon workers only detect/report. Purchase entry clicks happen in
+            # explicit visible handoff sessions so the user can complete payment manually.
+            "auto_click_entry": False,
+            "dry_run": False,
             "notify": {"console": True, "desktop": False, "webhook_url": ""},
         }
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -377,6 +483,58 @@ class WorkerSupervisor:
         )
         return event_id
 
+    async def _handle_worker_event(
+        self,
+        account_id: int,
+        event: WatchEvent,
+        _event_id: int,
+    ) -> None:
+        if event.type != "hit" or not event.available:
+            return
+        # visible-in-window 模式下 worker 自身就是可见浏览器，命中时已就地点击入口并在等待人工
+        # 付款（事件带 action="clicked_entry"）。此时再起 handoff 会 stop_worker 把可见浏览器杀掉，
+        # 违背"省去重启延迟"的设计——直接跳过。窗口外（未点击）仍走正常 handoff。
+        if event.action == "clicked_entry":
+            return
+
+        target = self._matching_target_row(account_id, event.target)
+        if target is None:
+            return
+        if not bool(target["on_hit_handoff"]) or bool(target["dry_run"]):
+            return
+
+        task = asyncio.create_task(
+            self._auto_handoff_after_hit(
+                account_id=account_id,
+                target_id=int(target["id"]),
+                click_entry=bool(target["auto_click_entry"]),
+            )
+        )
+        self._auto_handoff_tasks.add(task)
+        task.add_done_callback(self._auto_handoff_tasks.discard)
+
+    async def _auto_handoff_after_hit(
+        self,
+        account_id: int,
+        target_id: int,
+        click_entry: bool,
+    ) -> None:
+        try:
+            await self.start_handoff_session(
+                account_id,
+                target_id=target_id,
+                click_entry=click_entry,
+                restore_worker=False,
+            )
+        except Exception as exc:
+            await self._record_daemon_event(
+                account_id,
+                event_type="handoff",
+                action="skipped",
+                target=f"target:{target_id}",
+                message=f"auto handoff failed: {exc}",
+            )
+
     def _resolve_handoff_target(self, account_id: int, target_id: int | None) -> TargetSpec:
         if target_id is not None:
             row = self.repository.get_target(target_id)
@@ -395,6 +553,16 @@ class WorkerSupervisor:
             billing_cycle=BillingCycle(row["billing_cycle"]),
             tier=Tier(row["tier"]),
         )
+
+    def _matching_target_row(self, account_id: int, target_label: str) -> dict[str, object] | None:
+        for row in self.repository.list_targets(account_id=account_id, enabled_only=True):
+            spec = TargetSpec(
+                billing_cycle=BillingCycle(row["billing_cycle"]),
+                tier=Tier(row["tier"]),
+            )
+            if spec.describe() == target_label:
+                return row
+        return None
 
 
 async def _default_process_factory(command: Sequence[str]) -> ProcessLike:

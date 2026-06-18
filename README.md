@@ -14,7 +14,7 @@ When enabled, it clicks only the purchase/subscription entry once and then waits
 
 - CLI: one-off `check`, manual `login`, continuous `watch`, selector debugging.
 - Local daemon: FastAPI + SQLite + account-level headless workers, controlled through REST/WS.
-- Tauri GUI dev shell: menu-bar app that starts the daemon and talks to it over localhost.
+- Tauri GUI dev shell: menu-bar app that starts the daemon and manages accounts/targets/workers.
 - macOS `.app`: Tauri bundle with a PyInstaller Python sidecar.
 
 ## Prerequisites On macOS
@@ -72,8 +72,31 @@ Important fields:
 - `user_data_dir`: Playwright persistent profile directory. One account/profile must not be opened by
   multiple workers at the same time.
 - `refresh_interval_seconds` and `refresh_jitter_seconds`: account-level low-frequency cadence.
-- `auto_click_entry`: default `true`; when a hit is available, click only the entry button once.
+- `active_window_start` and `active_window_end`: optional daily sale window such as `10:00` to
+  `10:30`. When omitted, the legacy low-frequency cadence is used.
+- `active_timezone`: optional IANA timezone such as `Asia/Shanghai`; empty means local machine time.
+- `active_interval_seconds`, `active_jitter_seconds`, and `idle_interval_seconds`: fast cadence inside
+  the sale window and low-frequency/sleep-until-window behavior outside it. Very low intervals can
+  trigger rate limits or risk controls and reduce the chance of purchase.
+- `auto_click_entry`: default `true`; CLI watch can click only the entry button once. Daemon headless
+  workers do not click; visible handoff sessions use this as the explicit entry-click choice.
+- `on_hit_handoff`: daemon target option, default `true`; when a headless worker sees `available`, it
+  stops that account worker and opens a visible handoff session for manual payment.
 - `dry_run`: set `true` for safe demonstrations; detect and notify without clicking.
+
+Example sale-window target:
+
+```yaml
+targets:
+  - billing_cycle: monthly
+    tier: Pro
+    active_window_start: "10:00"
+    active_window_end: "10:30"
+    active_timezone: "Asia/Shanghai"
+    active_interval_seconds: 3
+    active_jitter_seconds: 1
+    idle_interval_seconds: 600
+```
 
 Login state is stored in `user_data_dir`; account passwords are never stored by this project.
 
@@ -201,7 +224,7 @@ export TARGET_ID=$(
   curl -sS -X POST "$BASE_URL/accounts/$ACCOUNT_ID/targets" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"billing_cycle":"monthly","tier":"Pro","enabled":true,"interval":90,"jitter":30,"dry_run":true,"auto_click_entry":false}' \
+    -d '{"billing_cycle":"monthly","tier":"Pro","enabled":true,"interval":90,"jitter":30,"dry_run":true,"auto_click_entry":false,"on_hit_handoff":true,"active_window_start":"10:00","active_window_end":"10:30","active_timezone":"Asia/Shanghai","active_interval_seconds":3,"active_jitter_seconds":1,"idle_interval_seconds":600}' \
   | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["id"])'
 )
 ```
@@ -280,9 +303,10 @@ file. Daemon binary lookup order:
 2. bundled sidecar in Tauri resource/current-exe directories
 3. `glm-plan` on `PATH`
 
-In the GUI, add an account using an absolute `user_data_dir`, add targets, then use Start/Login/Handoff.
-Daemon workers are headless. Login and handoff stop that account worker first and open a visible
-browser using the same profile. One account profile cannot be used concurrently.
+In the GUI, add an account using an absolute `user_data_dir`, add targets, set dry-run/active-window
+cadence/auto-handoff per target, then use Start/Login/Handoff. Daemon workers are headless. Login and
+handoff stop that account worker first and open a visible browser using the same profile. One account
+profile cannot be used concurrently.
 
 ### Build A macOS `.app`
 
@@ -365,6 +389,9 @@ or clear proxy variables for this shell:
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 ```
 
+If the GUI shows `Failed to fetch` or does not load accounts, also check the macOS system proxy
+settings and add `127.0.0.1` / `localhost` to the bypass list.
+
 ### Playwright cannot launch Chromium
 
 Install Chromium for Playwright:
@@ -432,6 +459,12 @@ exec glm-plan "$@"
 Real page state depends on login state. An already subscribed account can show `sold_out`. A fresh
 not-logged-in profile may show `available` with button text like `特惠订阅`; use `dry_run: true` for
 safe demos.
+
+### Fast refresh is too aggressive
+
+Use active windows only for the real sale period, for example `10:00` to `10:30`. The scheduler clamps
+the fast interval to a non-zero hard minimum and keeps jitter, but choosing very low values can still
+trigger rate limits or risk controls.
 
 ## Development Checks
 

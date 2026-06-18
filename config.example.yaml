@@ -20,6 +20,17 @@ refresh_interval_seconds: 90
 refresh_jitter_seconds: 30
 max_checks: 0            # 0 = 无限循环；多目标时表示账号级扫描轮数
 
+# 可选开售窗口：未设置 active_window_start/end 时保持上面的低频节奏。
+# 时段内按 active_interval_seconds ± active_jitter_seconds 快刷；硬下限会防止 0 秒 spin。
+# 时段外最多按 idle_interval_seconds 低频检查，也会睡到下次窗口开始。
+# 过低间隔可能触发站点限流/风控，反而买不到。
+active_window_start: ""  # 例如 "10:00"
+active_window_end: ""    # 例如 "10:30"
+active_timezone: ""      # 空 = 本机本地时区；也可写 "Asia/Shanghai"
+active_interval_seconds: 3
+active_jitter_seconds: 1
+idle_interval_seconds: 600
+
 # 浏览器
 headless: false          # 首次登录请用 false（可视化）；watch 可设 true
 user_data_dir: "user_data/default"   # 登录态持久化目录（不存账号密码）

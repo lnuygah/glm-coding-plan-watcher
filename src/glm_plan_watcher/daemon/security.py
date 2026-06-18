@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import secrets
@@ -97,6 +98,21 @@ def bind_server_socket(host: str, port: int) -> socket.socket:
         sock.close()
         raise
     return sock
+
+
+def bind_with_port_fallback(host: str, port: int) -> socket.socket:
+    """Bind to the requested port; only fall back to a free port if it is in use.
+
+    其它 OSError（host 无效、权限、socket 异常等）原样抛出，避免被误当成“端口占用”。
+    port=0 本就是“自动选空闲端口”，失败时不应回退（多为底层异常）。
+    """
+
+    try:
+        return bind_server_socket(host, port)
+    except OSError as exc:
+        if port == 0 or exc.errno != errno.EADDRINUSE:
+            raise
+        return bind_server_socket(host, 0)
 
 
 def authorized_bearer(authorization: str | None, token: str) -> bool:

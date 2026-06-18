@@ -15,6 +15,12 @@ def test_load_config_yaml(tmp_path: Path) -> None:
 billing_cycle: yearly
 tier: Max
 refresh_interval_seconds: 10
+active_window_start: "10:00"
+active_window_end: "10:30"
+active_timezone: "Asia/Shanghai"
+active_interval_seconds: 3
+active_jitter_seconds: 1
+idle_interval_seconds: 600
 notify:
   console: false
   webhook_url: "https://example.test/hook"
@@ -27,10 +33,20 @@ notify:
     assert config.billing_cycle is BillingCycle.yearly
     assert config.tier is Tier.Max
     assert config.refresh_interval_seconds == 10
+    assert config.active_window_start == "10:00"
     assert config.notify.console is False
     assert config.notify.webhook_url == "https://example.test/hook"
     assert config.target_specs == [
-        TargetSpec(billing_cycle=BillingCycle.yearly, tier=Tier.Max),
+        TargetSpec(
+            billing_cycle=BillingCycle.yearly,
+            tier=Tier.Max,
+            active_window_start="10:00",
+            active_window_end="10:30",
+            active_timezone="Asia/Shanghai",
+            active_interval_seconds=3,
+            active_jitter_seconds=1,
+            idle_interval_seconds=600,
+        ),
     ]
 
 
@@ -43,6 +59,8 @@ tier: Max
 targets:
   - billing_cycle: monthly
     tier: Lite
+    active_window_start: "10:00"
+    active_window_end: "10:30"
   - billing_cycle: quarterly
     tier: Pro
 """,
@@ -52,7 +70,12 @@ targets:
     config = load_config(path)
 
     assert config.target_specs == [
-        TargetSpec(billing_cycle=BillingCycle.monthly, tier=Tier.Lite),
+        TargetSpec(
+            billing_cycle=BillingCycle.monthly,
+            tier=Tier.Lite,
+            active_window_start="10:00",
+            active_window_end="10:30",
+        ),
         TargetSpec(billing_cycle=BillingCycle.quarterly, tier=Tier.Pro),
     ]
 
@@ -74,4 +97,5 @@ def test_dump_default_yaml_contains_safety_defaults() -> None:
 
     assert "auto_click_entry: true" in text
     assert "dry_run: false" in text
+    assert "active_window_start" in text
     assert "最终支付必须人工确认" in text

@@ -72,7 +72,8 @@ fn daemon_handshake(state: State<'_, DaemonState>) -> Result<Option<DaemonHandsh
 }
 
 fn start_daemon(app: &tauri::App) -> tauri::Result<()> {
-    let port = env::var("GLM_WATCHER_DAEMON_PORT").unwrap_or_else(|_| "0".to_string());
+    // 固定端口优先（便于理解/排障）；被占用时 daemon 自动回退到空闲端口，UI 以握手文件为准。
+    let port = env::var("GLM_WATCHER_DAEMON_PORT").unwrap_or_else(|_| "8765".to_string());
     let daemon_bin = resolve_daemon_bin(app);
     let data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;

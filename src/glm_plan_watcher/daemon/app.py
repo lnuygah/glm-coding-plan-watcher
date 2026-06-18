@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from glm_plan_watcher.daemon.api_models import (
@@ -43,6 +44,12 @@ def create_app(
     daemon_token = resolve_token(token)
 
     app = FastAPI(title="GLM Plan Watcher Daemon")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.repository = repo
     app.state.broadcaster = events
     app.state.supervisor = workers
@@ -50,7 +57,7 @@ def create_app(
 
     @app.middleware("http")
     async def require_bearer_token(request: Request, call_next: Any) -> JSONResponse:
-        if request.url.path == "/health":
+        if request.method == "OPTIONS" or request.url.path == "/health":
             return await call_next(request)
         if not authorized_bearer(request.headers.get("authorization"), daemon_token):
             return JSONResponse(
@@ -108,6 +115,14 @@ def create_app(
                 jitter=payload.jitter,
                 dry_run=payload.dry_run,
                 auto_click_entry=payload.auto_click_entry,
+                active_window_start=payload.active_window_start,
+                active_window_end=payload.active_window_end,
+                active_timezone=payload.active_timezone,
+                active_interval_seconds=payload.active_interval_seconds,
+                active_jitter_seconds=payload.active_jitter_seconds,
+                idle_interval_seconds=payload.idle_interval_seconds,
+                on_hit_handoff=payload.on_hit_handoff,
+                visible_in_window=payload.visible_in_window,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

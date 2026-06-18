@@ -1,16 +1,36 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from io import StringIO
+from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from playwright.async_api import Page
 
 from glm_plan_watcher.config import AppConfig
-from glm_plan_watcher.detector import DetectorStrategy
+from glm_plan_watcher.detector import DetectorStrategy, DomDetector
 from glm_plan_watcher.models import BillingCycle, ButtonState, CheckResult, TargetSpec, Tier
+from glm_plan_watcher.scheduler import SchedulerPolicy
 from glm_plan_watcher.watcher import AccountWatcher
+
+
+class ClickRecordingDomDetector(DomDetector):
+    """DomDetector 子类，记录是否就地点击入口（不触碰浏览器）。"""
+
+    def __init__(self, state: ButtonState) -> None:
+        super().__init__()
+        self.state = state
+        self.clicked: list[TargetSpec] = []
+
+    async def detect(self, page: Page, target: TargetSpec) -> CheckResult:
+        return CheckResult(target=target, state=self.state, reason="fake")
+
+    async def click_entry_button(self, page: Any, target: TargetSpec) -> bool:
+        self.clicked.append(target)
+        return True
 
 
 class FakeDetector(DetectorStrategy):
@@ -113,6 +133,202 @@ async def test_account_watcher_uses_scheduler_policy_for_delay() -> None:
     assert scheduler.results[0].button_text == "06月18日 10:00 补货"
     assert events[0]["next_refresh_at"] is not None
     assert events[1]["type"] == "heartbeat"
+
+
+@pytest.mark.asyncio
+async def test_account_watcher_honors_target_level_dry_run_on_hit() -> None:
+    target = TargetSpec(
+        billing_cycle=BillingCycle.monthly,
+        tier=Tier.Pro,
+        dry_run=True,
+    )
+    output = StringIO()
+    config = AppConfig(targets=[target])
+
+    code = await AccountWatcher(
+        config,
+        detector=FakeDetector(state=ButtonState.available),
+        stdout=output,
+    ).monitor(page=object(), session=None)
+
+    events = _json_lines(output)
+    assert code == 0
+    assert events[0]["type"] == "hit"
+    assert events[0]["action"] == "dry_run"
+
+
+class _FakeSession:
+    """无浏览器的最小 session 替身：满足 _handle_hit 对 capture_artifacts 的调用。"""
+
+    async def capture_artifacts(self, kind: str, target: TargetSpec) -> tuple[None, None]:
+        return None, None
+
+
+class _SilentNotifier:
+    async def notify_available(self, result: CheckResult, artifacts: Any) -> None:
+        return None
+
+
+def _visible_window_target(dry_run: bool = False) -> TargetSpec:
+    return TargetSpec(
+        billing_cycle=BillingCycle.monthly,
+        tier=Tier.Pro,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        visible_in_window=True,
+        dry_run=dry_run,
+    )
+
+
+def _fixed_scheduler(now: datetime) -> SchedulerPolicy:
+    return SchedulerPolicy(base_interval_seconds=120, jitter_seconds=0, now_fn=lambda: now)
+
+
+def test_watcher_desired_headless_flips_inside_visible_window() -> None:
+    target = _visible_window_target()
+    config = AppConfig(targets=[target], auto_click_entry=False)
+
+    inside = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    watcher_inside = AccountWatcher(
+        config,
+        detector=FakeDetector(),
+        stdout=StringIO(),
+        scheduler_policy=_fixed_scheduler(inside),
+    )
+    assert watcher_inside._target_visible_now(target) is True
+    assert watcher_inside._desired_headless() is False
+
+    outside = datetime(2026, 6, 17, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    watcher_outside = AccountWatcher(
+        config,
+        detector=FakeDetector(),
+        stdout=StringIO(),
+        scheduler_policy=_fixed_scheduler(outside),
+    )
+    assert watcher_outside._target_visible_now(target) is False
+    # 时段外保持 headless（仅检测）。
+    assert watcher_outside._desired_headless() is True
+
+
+def test_watcher_visible_window_disabled_stays_headless() -> None:
+    # visible_in_window=False（默认）即便在时段内也保持 headless。
+    target = TargetSpec(
+        billing_cycle=BillingCycle.monthly,
+        tier=Tier.Pro,
+        active_window_start="10:00",
+        active_window_end="10:30",
+        active_timezone="Asia/Shanghai",
+        visible_in_window=False,
+    )
+    inside = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    watcher = AccountWatcher(
+        AppConfig(targets=[target]),
+        detector=FakeDetector(),
+        stdout=StringIO(),
+        scheduler_policy=_fixed_scheduler(inside),
+    )
+    assert watcher._target_visible_now(target) is False
+    assert watcher._desired_headless() is True
+
+
+@pytest.mark.asyncio
+async def test_watcher_clicks_entry_in_place_inside_visible_window() -> None:
+    target = _visible_window_target()
+    inside = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    detector = ClickRecordingDomDetector(ButtonState.available)
+    output = StringIO()
+    # config.auto_click_entry=False（与 daemon headless worker 一致），点击仅靠 visible_in_window。
+    watcher = AccountWatcher(
+        AppConfig(targets=[target], auto_click_entry=False),
+        detector=detector,
+        notifier=_SilentNotifier(),  # type: ignore[arg-type]
+        stdout=output,
+        scheduler_policy=_fixed_scheduler(inside),
+    )
+    watcher._pause_for_manual = _noop_pause  # type: ignore[method-assign]
+
+    await watcher._handle_hit(
+        _FakeSession(),  # type: ignore[arg-type]
+        page=object(),
+        result=CheckResult(target=target, state=ButtonState.available),
+        check_index=1,
+    )
+
+    assert detector.clicked == [target]
+    events = _json_lines(output)
+    assert events[0]["type"] == "hit"
+    assert events[0]["action"] == "clicked_entry"
+
+
+@pytest.mark.asyncio
+async def test_watcher_dry_run_suppresses_click_even_inside_visible_window() -> None:
+    target = _visible_window_target(dry_run=True)
+    inside = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    detector = ClickRecordingDomDetector(ButtonState.available)
+    output = StringIO()
+    watcher = AccountWatcher(
+        AppConfig(targets=[target], auto_click_entry=False),
+        detector=detector,
+        notifier=_SilentNotifier(),  # type: ignore[arg-type]
+        stdout=output,
+        scheduler_policy=_fixed_scheduler(inside),
+    )
+
+    # dry_run 下 _target_visible_now 必须为 False（绝不点击）。
+    assert watcher._target_visible_now(target) is False
+
+    await watcher._handle_hit(
+        _FakeSession(),  # type: ignore[arg-type]
+        page=object(),
+        result=CheckResult(target=target, state=ButtonState.available),
+        check_index=1,
+    )
+
+    assert detector.clicked == []
+    events = _json_lines(output)
+    assert events[0]["type"] == "hit"
+    assert events[0]["action"] == "dry_run"
+
+
+class _FailingSwitchSession:
+    """relaunch 失败的 session 替身：验证模式切换异常时发 error+shutdown JSON 行并退出。"""
+
+    def __init__(self) -> None:
+        # headless=True 与 desired(visible)=False 不一致 → 触发切换 → relaunch 抛错。
+        self.config = SimpleNamespace(headless=True, url="https://example.test")
+
+    async def relaunch_headless(self, headless: bool) -> Any:
+        raise RuntimeError("relaunch boom")
+
+    async def goto(self, url: str) -> Any:  # pragma: no cover - 不应到达
+        raise AssertionError("goto should not be reached after relaunch failure")
+
+
+@pytest.mark.asyncio
+async def test_watcher_browser_switch_failure_emits_error_and_shutdown() -> None:
+    target = _visible_window_target()
+    inside = datetime(2026, 6, 17, 10, 5, tzinfo=ZoneInfo("Asia/Shanghai"))
+    output = StringIO()
+    watcher = AccountWatcher(
+        AppConfig(targets=[target], auto_click_entry=False),
+        detector=FakeDetector(),
+        stdout=output,
+        scheduler_policy=_fixed_scheduler(inside),
+    )
+
+    code = await watcher.monitor(page=object(), session=_FailingSwitchSession())  # type: ignore[arg-type]
+
+    events = _json_lines(output)
+    types = [event["type"] for event in events]
+    assert code == 1
+    assert "error" in types
+    assert types[-1] == "shutdown"
+    assert any("switch failed" in (event.get("message") or "") for event in events)
+
+
+async def _noop_pause() -> None:
+    return None
 
 
 def _json_lines(output: StringIO) -> list[dict[str, Any]]:

@@ -12,7 +12,7 @@
 
 - CLI：单次 `check`、手动 `login`、持续 `watch`、selector 调试。
 - 本地 daemon：FastAPI + SQLite + 账号级 headless worker，通过 REST/WS 控制。
-- Tauri GUI 开发壳：启动 daemon 并通过 localhost 与其通信的菜单栏应用。
+- Tauri GUI 开发壳：启动 daemon，并管理账号、targets 和 workers 的菜单栏应用。
 - macOS `.app`：带 PyInstaller Python sidecar 的 Tauri 应用包。
 
 ## macOS 前置条件
@@ -66,8 +66,27 @@ make setup
   `billing_cycle` 与 `tier`。
 - `user_data_dir`: Playwright persistent profile 目录。同一个账号/profile 不能被多个 worker 同时打开。
 - `refresh_interval_seconds` and `refresh_jitter_seconds`: 账号级低频刷新节奏。
-- `auto_click_entry`: 默认 `true`；命中 available 时只点击一次入口按钮。
+- `active_window_start` 与 `active_window_end`: 可选的每日开售窗口，例如 `10:00` 到
+  `10:30`。省略时使用旧的低频刷新节奏。
+- `active_timezone`: 可选 IANA 时区，例如 `Asia/Shanghai`；留空表示本机本地时间。
+- `active_interval_seconds`、`active_jitter_seconds` 与 `idle_interval_seconds`: 开售窗口内的快刷节奏，以及窗口外低频检查/睡到窗口开始的行为。过低间隔可能触发限流或风控，反而降低买到的概率。
+- `auto_click_entry`: 默认 `true`；CLI watch 可只点击一次入口按钮。daemon headless worker 不点击；可见 handoff 会把它作为显式入口点击选择。
+- `on_hit_handoff`: daemon target 选项，默认 `true`；headless worker 检测到 `available` 后，会停止该账号 worker 并打开可见 handoff 会话，交给用户人工付款。
 - `dry_run`: 安全演示时设为 `true`；只检测和通知，不点击。
+
+开售窗口 target 示例：
+
+```yaml
+targets:
+  - billing_cycle: monthly
+    tier: Pro
+    active_window_start: "10:00"
+    active_window_end: "10:30"
+    active_timezone: "Asia/Shanghai"
+    active_interval_seconds: 3
+    active_jitter_seconds: 1
+    idle_interval_seconds: 600
+```
 
 登录态保存在 `user_data_dir` 中；本项目不会保存账号密码。
 
@@ -191,7 +210,7 @@ export TARGET_ID=$(
   curl -sS -X POST "$BASE_URL/accounts/$ACCOUNT_ID/targets" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"billing_cycle":"monthly","tier":"Pro","enabled":true,"interval":90,"jitter":30,"dry_run":true,"auto_click_entry":false}' \
+    -d '{"billing_cycle":"monthly","tier":"Pro","enabled":true,"interval":90,"jitter":30,"dry_run":true,"auto_click_entry":false,"on_hit_handoff":true,"active_window_start":"10:00","active_window_end":"10:30","active_timezone":"Asia/Shanghai","active_interval_seconds":3,"active_jitter_seconds":1,"idle_interval_seconds":600}' \
   | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["id"])'
 )
 ```
@@ -269,7 +288,7 @@ Tauri shell 会以 `--port 0`、本次启动专用 token，以及 app-data hands
 2. Tauri resource/current-exe 目录中的 bundled sidecar
 3. `PATH` 上的 `glm-plan`
 
-在 GUI 中，使用绝对路径形式的 `user_data_dir` 添加账号，添加 targets，然后使用 Start/Login/Handoff。daemon worker 是 headless 的。Login 和 handoff 会先停止该账号 worker，再用同一个 profile 打开可见浏览器。同一个账号 profile 不能并发使用。
+在 GUI 中，使用绝对路径形式的 `user_data_dir` 添加账号，添加 targets，并按 target 设置 dry-run、开售窗口、快刷节奏和自动 handoff，然后使用 Start/Login/Handoff。daemon worker 是 headless 的。Login 和 handoff 会先停止该账号 worker，再用同一个 profile 打开可见浏览器。同一个账号 profile 不能并发使用。
 
 ### 构建 macOS `.app`
 
@@ -346,6 +365,9 @@ export no_proxy=127.0.0.1,localhost
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 ```
 
+如果 GUI 显示 `Failed to fetch` 或账号列表加载不出来，也要检查 macOS 系统代理设置，把
+`127.0.0.1` / `localhost` 加入绕过代理列表。
+
 ### Playwright 无法启动 Chromium
 
 为 Playwright 安装 Chromium：
@@ -409,6 +431,10 @@ exec glm-plan "$@"
 ### 已订阅账号显示 sold out
 
 页面真实状态取决于登录态。已经订阅的账号可能显示 `sold_out`。全新的未登录 profile 可能显示 `available`，按钮文本类似 `特惠订阅`；安全演示请使用 `dry_run: true`。
+
+### 快刷过于激进
+
+只在真实开售时段使用 active window，例如 `10:00` 到 `10:30`。调度器会把快刷间隔钳制到非零硬下限，并保留 jitter；但过低的取值仍可能触发限流或风控。
 
 ## 开发检查
 

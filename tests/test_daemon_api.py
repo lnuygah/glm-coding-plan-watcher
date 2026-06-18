@@ -82,7 +82,19 @@ def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
     target = client.post(
         f"/accounts/{account['id']}/targets",
         headers=AUTH_HEADERS,
-        json={"billing_cycle": "monthly", "tier": "Pro", "interval": 60, "jitter": 20},
+        json={
+            "billing_cycle": "monthly",
+            "tier": "Pro",
+            "interval": 60,
+            "jitter": 20,
+            "active_window_start": "10:00",
+            "active_window_end": "10:30",
+            "active_timezone": "Asia/Shanghai",
+            "active_interval_seconds": 3,
+            "active_jitter_seconds": 1,
+            "idle_interval_seconds": 600,
+            "on_hit_handoff": True,
+        },
     ).json()
     event = WatchEvent(
         check_index=1,
@@ -99,12 +111,24 @@ def test_daemon_accounts_targets_events_and_workers(tmp_path: Path) -> None:
     )
     assert client.get(f"/targets/{target['id']}", headers=AUTH_HEADERS).json()["tier"] == "Pro"
     assert (
+        client.get(f"/targets/{target['id']}", headers=AUTH_HEADERS).json()[
+            "active_window_start"
+        ]
+        == "10:00"
+    )
+    assert (
         client.patch(
             f"/targets/{target['id']}",
             headers=AUTH_HEADERS,
-            json={"enabled": False},
+            json={"enabled": False, "active_interval_seconds": 4},
         ).json()["enabled"]
         is False
+    )
+    assert (
+        client.get(f"/targets/{target['id']}", headers=AUTH_HEADERS).json()[
+            "active_interval_seconds"
+        ]
+        == 4
     )
     assert (
         client.get(
@@ -152,6 +176,98 @@ def test_daemon_auth_and_health_exemption(tmp_path: Path) -> None:
     assert client.get("/accounts").status_code == 401
     assert client.get("/accounts", headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert client.get("/accounts", headers=AUTH_HEADERS).status_code == 200
+
+
+def test_target_visible_in_window_field_create_default_and_patch(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    account = client.post(
+        "/accounts", headers=AUTH_HEADERS, json={"display_name": "main"}
+    ).json()
+
+    # 未传 visible_in_window → 默认 False，且出现在创建响应里。
+    created = client.post(
+        f"/accounts/{account['id']}/targets",
+        headers=AUTH_HEADERS,
+        json={"billing_cycle": "monthly", "tier": "Pro"},
+    ).json()
+    assert created["visible_in_window"] is False
+
+    # 创建时显式置 True。
+    created_true = client.post(
+        f"/accounts/{account['id']}/targets",
+        headers=AUTH_HEADERS,
+        json={"billing_cycle": "yearly", "tier": "Max", "visible_in_window": True},
+    ).json()
+    assert created_true["visible_in_window"] is True
+
+    # PATCH 切换并出现在 GET /targets 响应里。
+    patched = client.patch(
+        f"/targets/{created['id']}",
+        headers=AUTH_HEADERS,
+        json={"visible_in_window": True},
+    ).json()
+    assert patched["visible_in_window"] is True
+    assert (
+        client.get(f"/targets/{created['id']}", headers=AUTH_HEADERS).json()["visible_in_window"]
+        is True
+    )
+    listed = client.get(f"/accounts/{account['id']}/targets", headers=AUTH_HEADERS).json()
+    assert all("visible_in_window" in row for row in listed)
+
+
+def test_create_account_without_path_auto_manages_profile(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    # 只填名字（不传 user_data_dir）→ 201 且自动分配 profiles/ 下目录。
+    response = client.post("/accounts", headers=AUTH_HEADERS, json={"display_name": "auto"})
+    assert response.status_code == 201
+    profile = Path(response.json()["user_data_dir"])
+    assert profile.parent == tmp_path / "profiles"
+    assert profile.is_dir()
+
+    # 传空白字符串也走自动分配。
+    blank = client.post(
+        "/accounts", headers=AUTH_HEADERS, json={"display_name": "blank", "user_data_dir": "   "}
+    )
+    assert blank.status_code == 201
+    assert Path(blank.json()["user_data_dir"]).parent == tmp_path / "profiles"
+
+
+def test_daemon_cors_headers_for_tauri_origin(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    response = client.get(
+        "/accounts",
+        headers={
+            **AUTH_HEADERS,
+            "Origin": "tauri://localhost",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_daemon_cors_preflight_is_not_blocked_by_auth(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+
+    response = client.options(
+        "/accounts",
+        headers={
+            "Origin": "tauri://localhost",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "authorization" in response.headers["access-control-allow-headers"].lower()
 
 
 def test_daemon_auto_generates_token_when_missing(tmp_path: Path) -> None:

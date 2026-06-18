@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tempfile
+import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,7 +13,18 @@ from typing import Any
 
 from glm_plan_watcher.models import WatchEvent
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+_TARGET_COLUMN_ADDITIONS = {
+    "active_window_start": "TEXT NOT NULL DEFAULT ''",
+    "active_window_end": "TEXT NOT NULL DEFAULT ''",
+    "active_timezone": "TEXT NOT NULL DEFAULT ''",
+    "active_interval_seconds": "REAL NOT NULL DEFAULT 3",
+    "active_jitter_seconds": "REAL NOT NULL DEFAULT 1",
+    "idle_interval_seconds": "REAL NOT NULL DEFAULT 600",
+    "on_hit_handoff": "INTEGER NOT NULL DEFAULT 1",
+    "visible_in_window": "INTEGER NOT NULL DEFAULT 0",
+}
 
 
 class Repository:
@@ -21,8 +34,16 @@ class Repository:
     and easy packaging as a Tauri sidecar dependency.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, profiles_dir: str | Path | None = None) -> None:
         self.path = Path(path)
+        # 账号 profile 目录由程序自动管理（用户无需手填路径）：普通 DB 放在 db 同级的 profiles/ 下；
+        # :memory: 不在 cwd 落地，改用临时目录，避免污染当前工作目录。
+        if profiles_dir is not None:
+            self.profiles_dir = Path(profiles_dir)
+        elif str(self.path) == ":memory:":
+            self.profiles_dir = Path(tempfile.mkdtemp(prefix="glm-watcher-profiles-"))
+        else:
+            self.profiles_dir = self.path.parent / "profiles"
         self._shared: sqlite3.Connection | None = None
         if str(self.path) == ":memory:":
             # in-memory DB 是“按连接”的：每次新建连接都会拿到一个空库。必须用一条常驻连接，
@@ -77,7 +98,15 @@ class Repository:
                     interval REAL NOT NULL DEFAULT 90,
                     jitter REAL NOT NULL DEFAULT 30,
                     dry_run INTEGER NOT NULL DEFAULT 0,
-                    auto_click_entry INTEGER NOT NULL DEFAULT 1
+                    auto_click_entry INTEGER NOT NULL DEFAULT 1,
+                    active_window_start TEXT NOT NULL DEFAULT '',
+                    active_window_end TEXT NOT NULL DEFAULT '',
+                    active_timezone TEXT NOT NULL DEFAULT '',
+                    active_interval_seconds REAL NOT NULL DEFAULT 3,
+                    active_jitter_seconds REAL NOT NULL DEFAULT 1,
+                    idle_interval_seconds REAL NOT NULL DEFAULT 600,
+                    on_hit_handoff INTEGER NOT NULL DEFAULT 1,
+                    visible_in_window INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -113,18 +142,43 @@ class Repository:
                 );
                 """
             )
+            self._ensure_target_columns(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
             )
 
+    def _ensure_target_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(targets)").fetchall()}
+        for column, ddl in _TARGET_COLUMN_ADDITIONS.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE targets ADD COLUMN {column} {ddl}")
+
+    def generate_profile_dir(self) -> str:
+        """为新账号生成一个唯一的、程序自管理的 profile 目录（不暴露给用户手填）。
+
+        用 exist_ok=False + 重试，确保是全新目录、绝不复用已有 profile（与 UNIQUE 语义一致）。
+        """
+        self.profiles_dir.mkdir(parents=True, exist_ok=True)
+        for _ in range(10):
+            path = self.profiles_dir / uuid.uuid4().hex
+            try:
+                path.mkdir(exist_ok=False)
+            except FileExistsError:
+                continue
+            return str(path)
+        raise RuntimeError("无法分配唯一的 profile 目录")
+
     def create_account(
         self,
         display_name: str,
-        user_data_dir: str,
+        user_data_dir: str | None = None,
         status: str = "stopped",
         last_login_at: str | None = None,
     ) -> dict[str, Any]:
+        # 留空时自动分配 profile 目录；用户也可显式传入以导入已有 profile（去除首尾空白）。
+        cleaned = (user_data_dir or "").strip()
+        user_data_dir = cleaned if cleaned else self.generate_profile_dir()
         with self.connect() as conn:
             cursor = conn.execute(
                 """
@@ -143,8 +197,13 @@ class Repository:
     def get_account(self, account_id: int, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
         owns_conn = conn is None
         if conn is None:
-            conn = sqlite3.connect(self.path)
-            conn.row_factory = sqlite3.Row
+            if self._shared is not None:
+                # :memory: 模式必须复用常驻连接，否则裸开会得到一个空库（no such table）。
+                conn = self._shared
+                owns_conn = False
+            else:
+                conn = sqlite3.connect(self.path)
+                conn.row_factory = sqlite3.Row
         try:
             row = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
             if row is None:
@@ -181,15 +240,25 @@ class Repository:
         jitter: float = 30.0,
         dry_run: bool = False,
         auto_click_entry: bool = True,
+        active_window_start: str = "",
+        active_window_end: str = "",
+        active_timezone: str = "",
+        active_interval_seconds: float = 3.0,
+        active_jitter_seconds: float = 1.0,
+        idle_interval_seconds: float = 600.0,
+        on_hit_handoff: bool = True,
+        visible_in_window: bool = False,
     ) -> dict[str, Any]:
         with self.connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO targets(
                     account_id, billing_cycle, tier, enabled, interval, jitter, dry_run,
-                    auto_click_entry
+                    auto_click_entry, active_window_start, active_window_end, active_timezone,
+                    active_interval_seconds, active_jitter_seconds, idle_interval_seconds,
+                    on_hit_handoff, visible_in_window
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     account_id,
@@ -200,6 +269,14 @@ class Repository:
                     jitter,
                     int(dry_run),
                     int(auto_click_entry),
+                    active_window_start,
+                    active_window_end,
+                    active_timezone,
+                    active_interval_seconds,
+                    active_jitter_seconds,
+                    idle_interval_seconds,
+                    int(on_hit_handoff),
+                    int(visible_in_window),
                 ),
             )
             return self.get_target(cursor.lastrowid, conn=conn)
@@ -220,8 +297,13 @@ class Repository:
     def get_target(self, target_id: int, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
         owns_conn = conn is None
         if conn is None:
-            conn = sqlite3.connect(self.path)
-            conn.row_factory = sqlite3.Row
+            if self._shared is not None:
+                # :memory: 模式必须复用常驻连接，否则裸开会得到一个空库（no such table）。
+                conn = self._shared
+                owns_conn = False
+            else:
+                conn = sqlite3.connect(self.path)
+                conn.row_factory = sqlite3.Row
         try:
             row = conn.execute("SELECT * FROM targets WHERE id = ?", (target_id,)).fetchone()
             if row is None:
@@ -240,6 +322,14 @@ class Repository:
             "jitter",
             "dry_run",
             "auto_click_entry",
+            "active_window_start",
+            "active_window_end",
+            "active_timezone",
+            "active_interval_seconds",
+            "active_jitter_seconds",
+            "idle_interval_seconds",
+            "on_hit_handoff",
+            "visible_in_window",
         }
         updates = {key: _sqlite_bool(value) for key, value in fields.items() if key in allowed}
         if updates:
@@ -394,8 +484,13 @@ class Repository:
     ) -> dict[str, Any] | None:
         owns_conn = conn is None
         if conn is None:
-            conn = sqlite3.connect(self.path)
-            conn.row_factory = sqlite3.Row
+            if self._shared is not None:
+                # :memory: 模式必须复用常驻连接，否则裸开会得到一个空库（no such table）。
+                conn = self._shared
+                owns_conn = False
+            else:
+                conn = sqlite3.connect(self.path)
+                conn.row_factory = sqlite3.Row
         try:
             row = conn.execute("SELECT * FROM workers WHERE account_id = ?", (account_id,)).fetchone()
             return _row_dict(row) if row is not None else None
@@ -419,7 +514,14 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def _normalize_bool_fields(row: sqlite3.Row) -> dict[str, Any]:
     data = _row_dict(row)
-    for key in ("enabled", "dry_run", "auto_click_entry", "available"):
+    for key in (
+        "enabled",
+        "dry_run",
+        "auto_click_entry",
+        "on_hit_handoff",
+        "visible_in_window",
+        "available",
+    ):
         if key in data:
             data[key] = bool(data[key])
     return data

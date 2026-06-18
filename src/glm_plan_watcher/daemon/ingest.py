@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterable, Iterable
+from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -54,6 +54,7 @@ async def persist_watch_event(
     account_id: int,
     event: WatchEvent,
     raw_json: str | None = None,
+    on_event: Callable[[int, WatchEvent, int], Awaitable[None]] | None = None,
 ) -> int:
     event_id = repository.insert_event(account_id, event, raw_json)
     if event.type == "heartbeat":
@@ -65,6 +66,8 @@ async def persist_watch_event(
             "event": event.model_dump(mode="json"),
         },
     )
+    if on_event is not None:
+        await on_event(account_id, event, event_id)
     return event_id
 
 
@@ -73,6 +76,7 @@ async def ingest_lines(
     repository: Repository,
     broadcaster: EventBroadcaster,
     account_id: int,
+    on_event: Callable[[int, WatchEvent, int], Awaitable[None]] | None = None,
 ) -> int:
     count = 0
     async for line in _aiter_lines(lines):
@@ -80,7 +84,7 @@ async def ingest_lines(
         if parsed is None:
             continue
         event, raw_json = parsed
-        await persist_watch_event(repository, broadcaster, account_id, event, raw_json)
+        await persist_watch_event(repository, broadcaster, account_id, event, raw_json, on_event)
         count += 1
     return count
 
@@ -90,6 +94,7 @@ async def ingest_stream(
     repository: Repository,
     broadcaster: EventBroadcaster,
     account_id: int,
+    on_event: Callable[[int, WatchEvent, int], Awaitable[None]] | None = None,
 ) -> int:
     count = 0
     while True:
@@ -100,7 +105,7 @@ async def ingest_stream(
         if parsed is None:
             continue
         event, raw_json = parsed
-        await persist_watch_event(repository, broadcaster, account_id, event, raw_json)
+        await persist_watch_event(repository, broadcaster, account_id, event, raw_json, on_event)
         count += 1
     return count
 
