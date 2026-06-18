@@ -367,6 +367,57 @@ async def test_handoff_immediately_after_start_drains_background_spawn(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_discard_account_stops_worker_and_clears_state(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(repo, EventBroadcaster(), process_factory=factory)
+
+    await supervisor.start_worker(account_id)
+    await _wait_for_spawn(supervisor)
+    await supervisor.discard_account(account_id)
+    await asyncio.sleep(0)
+
+    assert factory.processes[0].returncode is not None
+    assert account_id not in supervisor._handles  # noqa: SLF001
+    assert account_id not in supervisor._starting  # noqa: SLF001
+    assert account_id not in supervisor._spawn_tasks_by_account  # noqa: SLF001
+    assert account_id not in supervisor._restart_counts  # noqa: SLF001
+    assert len(factory.processes) == 1
+
+
+@pytest.mark.asyncio
+async def test_discard_account_drains_in_flight_spawn(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(repo, EventBroadcaster(), process_factory=factory)
+
+    await supervisor.start_worker(account_id)
+    await supervisor.discard_account(account_id)
+
+    assert len(factory.processes) == 1
+    assert factory.processes[0].returncode is not None
+    assert account_id not in supervisor._handles  # noqa: SLF001
+    assert account_id not in supervisor._spawn_tasks_by_account  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_discard_account_stops_headful_session(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account_id = seed_account(repo, tmp_path)
+    headful_factory = FakeProcessFactory()
+    supervisor = WorkerSupervisor(repo, EventBroadcaster(), headful_launcher=headful_factory)
+
+    await supervisor.start_login_session(account_id)
+    await supervisor.discard_account(account_id)
+    await asyncio.sleep(0)
+
+    assert headful_factory.processes[0].returncode is not None
+    assert account_id not in supervisor._headful_handles  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_profile_mutex_blocks_worker_start_during_headful_session(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "daemon.sqlite3")
     account_id = seed_account(repo, tmp_path)

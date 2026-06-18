@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +97,15 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-    def delete_account(account_id: int) -> None:
+    async def delete_account(
+        account_id: int,
+        purge_profile: bool = Query(False),
+    ) -> None:
+        account = _get_optional_account(repo, account_id)
+        if account is not None:
+            await workers.discard_account(account_id)
+            if purge_profile:
+                _purge_managed_profile(repo, account["user_data_dir"])
         repo.delete_account(account_id)
 
     @app.get("/accounts/{account_id}/targets")
@@ -226,3 +235,18 @@ def create_app(
             return
 
     return app
+
+
+def _get_optional_account(repo: Repository, account_id: int) -> dict[str, Any] | None:
+    try:
+        return repo.get_account(account_id)
+    except KeyError:
+        return None
+
+
+def _purge_managed_profile(repo: Repository, user_data_dir: str) -> None:
+    profile = Path(user_data_dir).expanduser().resolve(strict=False)
+    profiles_root = repo.profiles_dir.expanduser().resolve(strict=False)
+    if profile == profiles_root or profiles_root not in profile.parents:
+        return
+    shutil.rmtree(profile, ignore_errors=True)

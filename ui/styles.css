@@ -249,6 +249,38 @@ p {
   color: #3a4350;
 }
 
+.actions .danger-action,
+.danger-action {
+  border-color: #cf222e;
+  color: #a40e26;
+}
+
+.delete-confirm {
+  background: #fff1f1;
+  border: 1px solid #e5a5a5;
+  border-radius: 8px;
+  color: #7a1d1d;
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.delete-confirm[hidden] {
+  display: none;
+}
+
+.delete-confirm label {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.delete-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .profile {
   color: #5b6572;
   font-size: 13px;

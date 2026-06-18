@@ -20,6 +20,7 @@ class FakeSupervisor:
     def __init__(self) -> None:
         self.started: list[int] = []
         self.stopped: list[int] = []
+        self.discarded: list[int] = []
         self.logins: list[tuple[int, bool]] = []
         self.handoffs: list[tuple[int, int | None, bool, bool]] = []
 
@@ -30,6 +31,9 @@ class FakeSupervisor:
     async def stop_worker(self, account_id: int) -> dict[str, object]:
         self.stopped.append(account_id)
         return {"account_id": account_id, "status": "stopped", "pid": None}
+
+    async def discard_account(self, account_id: int) -> None:
+        self.discarded.append(account_id)
 
     def worker_status(self, account_id: int) -> dict[str, object]:
         return {"account_id": account_id, "status": "stopped", "pid": None}
@@ -234,6 +238,78 @@ def test_create_account_without_path_auto_manages_profile(tmp_path: Path) -> Non
     )
     assert blank.status_code == 201
     assert Path(blank.json()["user_data_dir"]).parent == tmp_path / "profiles"
+
+
+def test_delete_account_api_discards_and_removes_account(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    supervisor = FakeSupervisor()
+    client = TestClient(
+        create_app(  # type: ignore[arg-type]
+            repository=repo,
+            broadcaster=EventBroadcaster(),
+            supervisor=supervisor,
+            token=TOKEN,
+        )
+    )
+    account = client.post("/accounts", headers=AUTH_HEADERS, json={"display_name": "delete"}).json()
+
+    response = client.delete(f"/accounts/{account['id']}", headers=AUTH_HEADERS)
+
+    assert response.status_code == 204
+    assert supervisor.discarded == [account["id"]]
+    assert client.get("/accounts", headers=AUTH_HEADERS).json() == []
+
+
+def test_delete_missing_account_is_idempotent(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    supervisor = FakeSupervisor()
+    client = TestClient(
+        create_app(  # type: ignore[arg-type]
+            repository=repo,
+            broadcaster=EventBroadcaster(),
+            supervisor=supervisor,
+            token=TOKEN,
+        )
+    )
+
+    response = client.delete("/accounts/999", headers=AUTH_HEADERS)
+
+    assert response.status_code == 204
+    assert supervisor.discarded == []
+
+
+def test_delete_account_purges_only_managed_profiles(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    client = TestClient(create_app(repository=repo, token=TOKEN))
+    managed = client.post("/accounts", headers=AUTH_HEADERS, json={"display_name": "managed"}).json()
+    managed_profile = Path(managed["user_data_dir"])
+    (managed_profile / "marker").write_text("session", encoding="utf-8")
+
+    response = client.delete(
+        f"/accounts/{managed['id']}",
+        headers=AUTH_HEADERS,
+        params={"purge_profile": True},
+    )
+
+    assert response.status_code == 204
+    assert not managed_profile.exists()
+
+    external_profile = tmp_path / "external-profile"
+    external_profile.mkdir()
+    external = client.post(
+        "/accounts",
+        headers=AUTH_HEADERS,
+        json={"display_name": "external", "user_data_dir": str(external_profile)},
+    ).json()
+
+    response = client.delete(
+        f"/accounts/{external['id']}",
+        headers=AUTH_HEADERS,
+        params={"purge_profile": True},
+    )
+
+    assert response.status_code == 204
+    assert external_profile.is_dir()
 
 
 def test_daemon_cors_headers_for_tauri_origin(tmp_path: Path) -> None:

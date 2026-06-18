@@ -77,6 +77,32 @@ def test_create_account_auto_manages_profile_dir(tmp_path: Path) -> None:
     assert imported["user_data_dir"] == str(tmp_path / "user_data" / "default")
 
 
+def test_delete_account_cascades_related_rows(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "daemon.sqlite3")
+    account = repo.create_account("cascade", str(tmp_path / "profile"))
+    target = repo.create_target(account["id"], billing_cycle="monthly", tier="Pro")
+    event_id = repo.insert_event(
+        account["id"],
+        WatchEvent(
+            check_index=1,
+            target="连续包月 / Pro",
+            button_state="sold_out",
+        ),
+    )
+    repo.create_artifact(event_id, screenshot_path="hit.png")
+    repo.upsert_worker(account["id"], pid=123, status="running")
+
+    repo.delete_account(account["id"])
+
+    assert repo.list_accounts() == []
+    assert repo.list_targets(account_id=account["id"]) == []
+    assert repo.list_events(account_id=account["id"]) == []
+    assert repo.get_worker(account["id"]) is None
+    with repo.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM targets WHERE id = ?", (target["id"],)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+
+
 def test_memory_repository_auto_profile_not_in_cwd() -> None:
     import tempfile
 

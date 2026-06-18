@@ -39,6 +39,13 @@ const translations = {
     handoffButtonTitle: "用可见浏览器接管去付款：打开可见浏览器，最多点击一次购买入口；最终支付必须人工确认。",
     saveButton: "保存",
     deleteButton: "删除",
+    deleteAccountButton: "删除账号",
+    deleteAccountConfirm:
+      "确认删除账号「{name}」？此操作不可恢复，正在进行的监控会被停止。",
+    deleteAccountConfirmYes: "确认删除",
+    cancelButton: "取消",
+    purgeProfileLabel: "同时删除浏览器数据（登录态，不可恢复）",
+    deleteAccountFailed: "删除账号失败",
     enabledStatus: "启用",
     disabledStatus: "停用",
     billingLabel: "计费周期",
@@ -135,6 +142,13 @@ const translations = {
     handoffButtonTitle: "Take over payment in a visible browser: opens a visible browser and may click the purchase entry once; final payment is manual.",
     saveButton: "Save",
     deleteButton: "Delete",
+    deleteAccountButton: "Delete account",
+    deleteAccountConfirm:
+      'Delete account "{name}"? This cannot be undone, and any running monitor will be stopped.',
+    deleteAccountConfirmYes: "Delete",
+    cancelButton: "Cancel",
+    purgeProfileLabel: "Also delete browser data (login session, irreversible)",
+    deleteAccountFailed: "Delete account failed",
     enabledStatus: "enabled",
     disabledStatus: "disabled",
     billingLabel: "Billing",
@@ -249,6 +263,7 @@ const actionKeys = {
   stop: "stopButton",
   login: "loginButton",
   handoff: "handoffButton",
+  deleteaccount: "deleteAccountButton",
 };
 
 let ws = null;
@@ -388,6 +403,7 @@ function renderAccount(account, targets) {
     <div class="actions">
       ${accountActionsMarkup(status, hasTargets)}
     </div>
+    <div class="delete-confirm" hidden></div>
     <div class="targets"></div>
     <details class="add-target"${hasTargets ? "" : " open"}>
       <summary>${escapeHtml(t("addMonitorTask"))}</summary>
@@ -432,6 +448,10 @@ function renderAccount(account, targets) {
         }
         return;
       }
+      if (action === "deleteaccount") {
+        showDeleteAccountConfirm(row, account);
+        return;
+      }
       await withUiError(t("actionFailed", { action: actionText(action) }), async () => {
         if (action === "start") await api(`/accounts/${account.id}/worker/start`, { method: "POST" });
         if (action === "stop") await api(`/accounts/${account.id}/worker/stop`, { method: "POST" });
@@ -458,10 +478,14 @@ function renderAccount(account, targets) {
 function accountActionsMarkup(status, hasTargets) {
   const buttons = [];
   const seen = new Set();
-  const add = (action, labelKey, { primary = false, titleKey, disabled = false } = {}) => {
+  const add = (
+    action,
+    labelKey,
+    { primary = false, titleKey, disabled = false, danger = false } = {},
+  ) => {
     if (seen.has(action)) return;
     seen.add(action);
-    const cls = primary ? "primary-action" : "secondary-action";
+    const cls = `${primary ? "primary-action" : "secondary-action"}${danger ? " danger-action" : ""}`;
     const title = titleKey ? ` title="${escapeAttr(t(titleKey))}"` : "";
     const dis = disabled ? " disabled" : "";
     buttons.push(
@@ -492,8 +516,50 @@ function accountActionsMarkup(status, hasTargets) {
   if (hasTargets && !monitoring) add("start", "startButton");
   if (monitoring) add("stop", "stopButton");
   add("handoff", "handoffButton", { titleKey: "handoffButtonTitle" });
+  add("deleteaccount", "deleteAccountButton", { danger: true });
 
   return buttons.join("");
+}
+
+function showDeleteAccountConfirm(row, account) {
+  const confirm = row.querySelector(".delete-confirm");
+  confirm.replaceChildren();
+  confirm.hidden = false;
+
+  const message = document.createElement("p");
+  message.textContent = t("deleteAccountConfirm", { name: account.display_name });
+
+  const purgeLabel = document.createElement("label");
+  const purge = document.createElement("input");
+  purge.type = "checkbox";
+  purgeLabel.append(purge, document.createTextNode(t("purgeProfileLabel")));
+
+  const actions = document.createElement("div");
+  actions.className = "delete-confirm-actions";
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "button";
+  confirmButton.className = "danger-action";
+  confirmButton.textContent = t("deleteAccountConfirmYes");
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.textContent = t("cancelButton");
+  actions.append(confirmButton, cancelButton);
+
+  confirmButton.addEventListener("click", async () => {
+    await withUiError(t("deleteAccountFailed"), async () => {
+      await api(`/accounts/${account.id}?purge_profile=${String(purge.checked)}`, {
+        method: "DELETE",
+      });
+      authRequiredAccounts.delete(account.id);
+      await loadAccounts();
+    });
+  });
+  cancelButton.addEventListener("click", () => {
+    confirm.hidden = true;
+    confirm.replaceChildren();
+  });
+
+  confirm.append(message, purgeLabel, actions);
 }
 
 function renderTarget(account, target) {
